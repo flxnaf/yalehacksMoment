@@ -57,6 +57,14 @@ struct StreamView: View {
                 .opacity(viewModel.depthOverlayOpacity)
                 .allowsHitTesting(false)
             }
+            if viewModel.depthInferenceEnabled {
+              VisionOverlay(
+                persons: viewModel.audioEngine.detectedPersons,
+                sceneLabel: viewModel.audioEngine.detectedSceneLabel,
+                frameSize: geometry.size
+              )
+              .allowsHitTesting(false)
+            }
           }
         }
         .edgesIgnoringSafeArea(.all)

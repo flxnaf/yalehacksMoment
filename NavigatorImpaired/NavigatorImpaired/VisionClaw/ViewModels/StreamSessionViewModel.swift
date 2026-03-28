@@ -190,6 +190,13 @@ class StreamSessionViewModel: ObservableObject {
         await MainActor.run { [weak self] in
           guard let self else { return }
           self.depthFrame = result.colorized
+          self.audioEngine.visionDetector.detectPersons(
+              image: image,
+              depthMap: result.depthMap,
+              depthWidth: result.mapWidth,
+              depthHeight: result.mapHeight
+          )
+          self.audioEngine.visionDetector.classifyScene(image: image)
           self.audioEngine.update(depthMap: result.depthMap,
                                   width: result.mapWidth,
                                   height: result.mapHeight)

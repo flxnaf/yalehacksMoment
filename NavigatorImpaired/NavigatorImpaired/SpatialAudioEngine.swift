@@ -2,74 +2,82 @@ import AVFoundation
 import CoreMotion
 import UIKit
 
-// MARK: - FMObstacleVoice
+// MARK: - SubBassObstacleVoice
 
-/// Soft, bell-like obstacle tone — warm and informational, never alarming.
+/// Deep, warm sub-bass hum — felt more than heard.
 ///
-/// Uses a 2:1 modulator:carrier ratio which produces even harmonics (bell/chime
-/// character) rather than the 1:1 ratio's metallic edge. The modulation index
-/// is kept very low (0.10–0.45) so the tone stays round and musical.
-///
-/// Proximity controls:
-///   - **Mod index**: 0.10 (near-pure sine) → 0.45 (gentle bell shimmer)
-///   - **Pulse**: very gentle amplitude swell, 0.4–2.5 Hz
-///   - **Volume**: smooth ramp, never jarring
-///
-/// LP filter at ~2 kHz removes any remaining harshness.
-final class FMObstacleVoice {
+/// A triangle wave (softer than sine, no harsh partials) run through tanh
+/// waveshaping for analog warmth, then buried under three cascaded LP filters.
+/// The result is a smooth, pillowy low-end presence — like standing next to
+/// a subwoofer playing a sustained note — with zero "synth" character.
+final class SubBassObstacleVoice {
 
     var targetVolume:    Float = 0
-    var targetModIndex:  Float = 0.10
+    var targetBrightness: Float = 0.15
     var targetPulseRate: Float = 0.4
 
-    private let carrierFreq: Float
+    private let baseFreq: Float
     private let sr: Float
 
-    private var carrierPhase: Float = 0
-    private var modPhase:     Float = 0
-    private var pulsePhase:   Float = 0
+    private var phase: Float = 0
+    private var subPhase: Float = 0
 
-    private var currentVolume:    Float = 0
-    private var currentModIndex:  Float = 0.10
-    private var currentPulseRate: Float = 0.4
+    private var currentVolume:     Float = 0
+    private var currentBrightness: Float = 0.15
+    private var currentPulseRate:  Float = 0.4
+    private var breathPhase: Float = 0
 
-    private var lpState: Float = 0
-    private let lpAlpha: Float = 0.22          // gentler LP — warmer rolloff
+    // Three cascaded LP stages for an extremely dark rolloff
+    private var lp1: Float = 0
+    private var lp2: Float = 0
+    private var lp3: Float = 0
     private let slewRate: Float = 0.0004
 
     init(carrierFreq: Float, sampleRate: Float) {
-        self.carrierFreq = carrierFreq
+        self.baseFreq = carrierFreq
         self.sr = sampleRate
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
         let tv  = targetVolume
-        let tmi = targetModIndex
+        let tb  = targetBrightness
         let tpr = targetPulseRate
 
         for i in 0..<frameCount {
-            currentVolume    += (tv  - currentVolume)    * slewRate
-            currentModIndex  += (tmi - currentModIndex)  * slewRate
-            currentPulseRate += (tpr - currentPulseRate)  * slewRate
+            currentVolume     += (tv  - currentVolume)     * slewRate
+            currentBrightness += (tb  - currentBrightness) * slewRate
+            currentPulseRate  += (tpr - currentPulseRate)  * slewRate
 
-            // Gentle breathing — amplitude stays between 0.88 and 1.0
-            let pulse = 0.88 + 0.12 * sinf(2 * .pi * pulsePhase)
-            pulsePhase += max(0.3, currentPulseRate) / sr
-            if pulsePhase >= 1.0 { pulsePhase -= 1.0 }
+            // Slow breath — barely perceptible volume swell
+            breathPhase += max(0.3, currentPulseRate) / sr
+            if breathPhase >= 1.0 { breathPhase -= 1.0 }
+            let breath: Float = 0.92 + 0.08 * sinf(2 * .pi * breathPhase)
 
-            // FM with 2:1 ratio — bell/chime character, not metallic
-            let modFreq = carrierFreq * 2.0
-            let mod = currentModIndex * sinf(2 * .pi * modPhase)
-            modPhase += modFreq / sr
-            if modPhase >= 1.0 { modPhase -= 1.0 }
+            // Triangle wave: 4|2·phase - 1| - 1, range [-1, 1]
+            let tri = 4.0 * abs(2.0 * phase - 1.0) - 1.0
+            phase += baseFreq / sr
+            if phase >= 1.0 { phase -= 1.0 }
 
-            let carrier = sinf(2 * .pi * carrierPhase + mod)
-            carrierPhase += carrierFreq / sr
-            if carrierPhase >= 1.0 { carrierPhase -= 1.0 }
+            // Sub-octave sine for extra weight
+            let sub = sinf(2 * .pi * subPhase)
+            subPhase += (baseFreq * 0.5) / sr
+            if subPhase >= 1.0 { subPhase -= 1.0 }
 
-            let raw = carrier * pulse * currentVolume
-            lpState = lpAlpha * raw + (1 - lpAlpha) * lpState
-            buffer[i] = lpState
+            // Mix: triangle + sub, weighted by brightness
+            let dry = tri * 0.6 + sub * (0.4 + currentBrightness * 0.15)
+
+            // Tanh soft-saturation — rounds off edges, adds analog warmth
+            let drive: Float = 1.4 + currentBrightness * 0.6
+            let saturated = tanhf(dry * drive)
+
+            let raw = saturated * breath * currentVolume
+
+            // Triple cascaded LP — extremely dark, sub-bass only
+            let alpha: Float = 0.10 + currentBrightness * 0.04
+            lp1 = alpha * raw + (1 - alpha) * lp1
+            lp2 = alpha * lp1 + (1 - alpha) * lp2
+            lp3 = alpha * lp2 + (1 - alpha) * lp3
+            buffer[i] = lp3
         }
     }
 }
@@ -230,6 +238,11 @@ final class SpatialAudioEngine: ObservableObject {
     /// 0→1 fraction of the required sustain window.
     @Published var beaconSustainProgress: Float = 0
 
+    /// Detected persons for UI overlay (bounding boxes in Vision normalised coords).
+    @Published var detectedPersons: [PersonDetection] = []
+    /// Latest scene classification label.
+    @Published var detectedSceneLabel: String?
+
     // MARK: - Audio graph
 
     private let avEngine    = AVAudioEngine()
@@ -238,10 +251,10 @@ final class SpatialAudioEngine: ObservableObject {
 
     // Voice pool — 8 repositionable obstacle voices
     private let poolSize = 8
-    private var poolVoices: [FMObstacleVoice] = []
+    private var poolVoices: [SubBassObstacleVoice] = []
     private var poolNodes:  [AVAudioSourceNode] = []
     /// Carrier frequencies spread across a warm octave (F3 → D4).
-    private let poolFrequencies: [Float] = [349, 370, 392, 415, 440, 466, 494, 523]
+    private let poolFrequencies: [Float] = [58, 65, 73, 78, 87, 93, 98, 110]
     /// Currently assigned world bearing per pool slot (nil = unassigned).
     private var poolAssignment: [Float?] = []
 
@@ -255,6 +268,11 @@ final class SpatialAudioEngine: ObservableObject {
     // MARK: - World map (360° obstacle memory)
 
     private let worldMap = WorldObstacleMap()
+    private let pathFinder = PathFinder()
+
+    // MARK: - Vision (person/object detection)
+
+    let visionDetector = VisionDetector()
 
     // MARK: - Zone tracking (for haptics only)
 
@@ -309,12 +327,26 @@ final class SpatialAudioEngine: ObservableObject {
     func update(depthMap: [Float], width: Int, height: Int) {
         guard isEnabled, avEngine.isRunning else { return }
 
-        let scanResult = PathFinder.scan(depthMap: depthMap, width: width, height: height)
+        let scanResult = pathFinder.scan(depthMap: depthMap, width: width, height: height)
         depthProfile = scanResult.profile
         rawPaths = scanResult.paths
 
+        // Boost world map bins where persons are detected
+        var boostedProfile = scanResult.profile
+        for person in visionDetector.latestPersons {
+            if let depth = person.estimatedDepth {
+                let col = min(PathFinder.columnCount - 1,
+                              max(0, Int(person.azimuthFraction * Float(PathFinder.columnCount))))
+                boostedProfile[col] = max(boostedProfile[col], depth * 1.3)
+                if col > 0 { boostedProfile[col - 1] = max(boostedProfile[col - 1], depth * 1.1) }
+                if col < PathFinder.columnCount - 1 {
+                    boostedProfile[col + 1] = max(boostedProfile[col + 1], depth * 1.1)
+                }
+            }
+        }
+
         // 360° world-space obstacle audio
-        let obstacles = worldMap.update(profile: scanResult.profile, heading: currentHeading)
+        let obstacles = worldMap.update(profile: boostedProfile, heading: currentHeading)
         applyVoicePool(obstacles)
 
         // Beacon
@@ -326,6 +358,10 @@ final class SpatialAudioEngine: ObservableObject {
             let surfaces = memory.update(rawZones: rawZones)
             haptics.update(surfaces: surfaces)
         }
+
+        // Publish vision results for UI overlay
+        detectedPersons = visionDetector.latestPersons
+        detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
 
         updateCount += 1
         if updateCount % 45 == 1 { logDiagnostics(obstacles: obstacles, paths: scanResult.paths) }
@@ -371,7 +407,7 @@ final class SpatialAudioEngine: ObservableObject {
         // --- Voice pool (8 repositionable FM obstacle sources) ---
         for i in 0..<poolSize {
             let freq = poolFrequencies[i]
-            let voice = FMObstacleVoice(carrierFreq: freq, sampleRate: Float(sampleRate))
+            let voice = SubBassObstacleVoice(carrierFreq: freq, sampleRate: Float(sampleRate))
             poolVoices.append(voice)
 
             let node = AVAudioSourceNode(format: mono) { [voice] _, _, frameCount, abl in
@@ -448,6 +484,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
         motion.stopDeviceMotionUpdates()
         worldMap.reset()
+        pathFinder.reset()
         memory.reset()
         print("[SpatialAudio] Stopped")
     }
@@ -556,9 +593,9 @@ final class SpatialAudioEngine: ObservableObject {
 
         // Silence unassigned voices
         for pi in 0..<poolSize where !used.contains(pi) {
-            poolVoices[pi].targetVolume    = 0
-            poolVoices[pi].targetModIndex  = 0.15
-            poolVoices[pi].targetPulseRate = 0.6
+            poolVoices[pi].targetVolume     = 0
+            poolVoices[pi].targetBrightness = 0.15
+            poolVoices[pi].targetPulseRate  = 0.4
             poolAssignment[pi] = nil
         }
 
@@ -567,9 +604,9 @@ final class SpatialAudioEngine: ObservableObject {
             let obs = topN[oi]
             poolAssignment[pi] = obs.bearing
 
-            poolVoices[pi].targetVolume    = obstacleVolume(obs.depth)
-            poolVoices[pi].targetModIndex  = obstacleModIndex(obs.depth)
-            poolVoices[pi].targetPulseRate = obstaclePulseRate(depth: obs.depth, velocity: obs.velocity)
+            poolVoices[pi].targetVolume     = obstacleVolume(obs.depth)
+            poolVoices[pi].targetBrightness = obstacleBrightness(obs.depth)
+            poolVoices[pi].targetPulseRate  = obstaclePulseRate(depth: obs.depth, velocity: obs.velocity)
 
             let pos = bearingToAudioPosition(bearing: obs.bearing, depth: obs.depth)
             poolNodes[pi].position = pos
@@ -604,17 +641,19 @@ final class SpatialAudioEngine: ObservableObject {
     // MARK: - Obstacle parameter curves
 
     private func obstacleVolume(_ d: Float) -> Float {
-        let t = max(0, (d - 0.15) / 0.75)
-        return peakObstacleVol * t * t
+        // Only audible when depth > 0.50 (very close). Cubic curve = silence
+        // for distant/moderate obstacles, ramps steeply for imminent ones.
+        let t = max(0, (d - 0.50) / 0.50)
+        return peakObstacleVol * t * t * t
     }
 
-    private func obstacleModIndex(_ d: Float) -> Float {
-        let t = max(0, min(1, (d - 0.15) / 0.70))
-        return 0.10 + t * 0.35
+    private func obstacleBrightness(_ d: Float) -> Float {
+        let t = max(0, min(1, (d - 0.50) / 0.50))
+        return 0.15 + t * 0.50
     }
 
     private func obstaclePulseRate(depth d: Float, velocity v: Float) -> Float {
-        let t = max(0, min(1, d))
+        let t = max(0, min(1, (d - 0.40) / 0.60))
         let base = 0.4 + 2.1 * powf(t, 1.5)
         return min(3.0, base + max(0, v) * 0.5)
     }

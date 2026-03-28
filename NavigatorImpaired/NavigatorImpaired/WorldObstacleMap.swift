@@ -43,7 +43,7 @@ final class WorldObstacleMap {
     private let attackAlpha:  Float = 0.50
     private let visibleDecayAlpha: Float = 0.15    // blend rate when depth decreases in-view
     private let releaseDecay: Float = 0.985        // per-frame decay for non-visible bins
-    private let presenceThreshold: Float = 0.12
+    private let presenceThreshold: Float = 0.35
     private let staleFadeStart: Float = 3.0        // seconds before stale penalty begins
     private let staleFadeEnd:   Float = 8.0        // seconds for full stale fadeout
     private let velocityWeight: Float = 0.45
