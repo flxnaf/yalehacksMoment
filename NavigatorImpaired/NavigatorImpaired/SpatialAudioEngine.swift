@@ -4,45 +4,33 @@ import UIKit
 
 // MARK: - Sheikah Sensor Voice (BOTW shrine detector)
 
-/// Recreates the Zelda BOTW Sheikah Sensor "ding-ding" double-ping.
-///
-/// Each ping cycle: two short, crisp high-pitched tones ~120ms apart,
-/// then silence until the next cycle. Pure sine fundamentals with a
-/// subtle octave overtone for crystalline clarity, fast exponential
-/// decay, and a slight pitch bend on attack.
+/// Two short, crisp high-pitched tones ~120ms apart ("ding-ding"),
+/// then silence until the next cycle. Pure sine with octave overtone,
+/// fast exponential decay, and subtle pitch bend on attack.
 final class ShrinePingVoice {
 
     var targetVolume: Float = 0
-
-    /// Seconds between double-ping cycles.
     var pingInterval: Float = 2.0
 
     private let sr: Float
     private var currentVolume: Float = 0
     private let slewRate: Float = 0.008
 
-    // Ping state machine
     private var samplesSinceCycle: Int
     private var pingState: PingState = .idle
 
-    // Two tones: first slightly lower, second slightly higher
     private let freq1: Float = 1046.50   // C6
     private let freq2: Float = 1318.51   // E6
 
     private var phase: Float = 0
     private var envelope: Float = 0
 
-    // Timing in samples
-    private let pingDuration: Int      // ~80ms per ping
-    private let gapBetweenPings: Int   // ~120ms gap between first and second
+    private let pingDuration: Int
+    private let gapBetweenPings: Int
     private var samplesInState: Int = 0
 
     private enum PingState {
-        case idle
-        case ping1
-        case gap
-        case ping2
-        case tail
+        case idle, ping1, gap, ping2, tail
     }
 
     init(sampleRate: Float) {
@@ -54,11 +42,9 @@ final class ShrinePingVoice {
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
         let tv = targetVolume
-
         for i in 0..<frameCount {
             currentVolume += (tv - currentVolume) * slewRate
 
-            // Schedule new double-ping cycle
             samplesSinceCycle += 1
             if pingState == .idle && samplesSinceCycle >= Int(pingInterval * sr) && currentVolume > 0.001 {
                 pingState = .ping1
@@ -68,52 +54,39 @@ final class ShrinePingVoice {
                 phase = 0
             }
 
-            // State machine
             var sample: Float = 0
             switch pingState {
             case .idle:
                 break
-
             case .ping1:
                 let freq = freq1 + 40.0 * max(0, 1.0 - Float(samplesInState) / Float(pingDuration))
                 sample = renderTone(freq: freq)
                 envelope *= expf(-3.5 / sr)
                 samplesInState += 1
                 if samplesInState >= pingDuration {
-                    pingState = .gap
-                    samplesInState = 0
+                    pingState = .gap; samplesInState = 0
                 }
-
             case .gap:
                 envelope *= 0.95
                 samplesInState += 1
                 if samplesInState >= gapBetweenPings {
-                    pingState = .ping2
-                    samplesInState = 0
-                    envelope = 0.85
-                    phase = 0
+                    pingState = .ping2; samplesInState = 0
+                    envelope = 0.85; phase = 0
                 }
-
             case .ping2:
                 let freq = freq2 + 30.0 * max(0, 1.0 - Float(samplesInState) / Float(pingDuration))
                 sample = renderTone(freq: freq)
                 envelope *= expf(-4.0 / sr)
                 samplesInState += 1
                 if samplesInState >= pingDuration {
-                    pingState = .tail
-                    samplesInState = 0
+                    pingState = .tail; samplesInState = 0
                 }
-
             case .tail:
                 sample = renderTone(freq: freq2) * 0.3
                 envelope *= expf(-8.0 / sr)
                 samplesInState += 1
-                if envelope < 0.001 {
-                    pingState = .idle
-                    envelope = 0
-                }
+                if envelope < 0.001 { pingState = .idle; envelope = 0 }
             }
-
             buffer[i] = sample * currentVolume
         }
     }
@@ -122,22 +95,77 @@ final class ShrinePingVoice {
         let fundamental = sinf(2 * .pi * phase)
         let octave = sinf(4 * .pi * phase) * 0.25
         let result = (fundamental + octave) * envelope
-
         phase += freq / sr
         if phase >= 1.0 { phase -= 1.0 }
-
         return result
     }
 }
 
+// MARK: - DepthRotationEstimator
+
+/// Estimates horizontal rotation from consecutive depth frames by
+/// tracking how the depth profile shifts left/right between frames.
+/// Works as a supplementary signal to the phone IMU — especially
+/// useful when the glasses are the depth source and the phone is
+/// in the pocket (IMU tracks pocket, not head).
+final class DepthRotationEstimator {
+
+    private var prevProfile: [Float]?
+
+    /// Returns estimated yaw delta in degrees since last call.
+    /// Positive = turned right, negative = turned left.
+    func estimateYawDelta(profile: [Float]) -> Float {
+        guard let prev = prevProfile, prev.count == profile.count, profile.count >= 6 else {
+            prevProfile = profile
+            return 0
+        }
+        defer { prevProfile = profile }
+
+        let n = profile.count
+        // Cross-correlate prev and current to find the horizontal shift.
+        // Search ±25% of the profile width.
+        let maxShift = max(1, n / 4)
+        var bestShift = 0
+        var bestCorr: Float = -.greatestFiniteMagnitude
+
+        for shift in -maxShift...maxShift {
+            var corr: Float = 0
+            var count = 0
+            for i in 0..<n {
+                let j = i + shift
+                guard j >= 0, j < n else { continue }
+                corr += prev[i] * profile[j]
+                count += 1
+            }
+            if count > 0 { corr /= Float(count) }
+            if corr > bestCorr {
+                bestCorr = corr
+                bestShift = shift
+            }
+        }
+
+        // Convert column shift to degrees.
+        // PathFinder uses ~24 columns spanning ~70° FOV.
+        let degreesPerColumn: Float = 70.0 / Float(n)
+        return Float(bestShift) * degreesPerColumn
+    }
+
+    func reset() { prevProfile = nil }
+}
+
 // MARK: - SpatialAudioEngine
 
-/// Spatial audio engine — single BOTW-style Sheikah Sensor double-ping
-/// positioned in 3D via HRTF. Head rotation is always tracked via
-/// CMMotionManager so the ping direction shifts as the user turns.
+/// Spatial audio engine with a single BOTW Sheikah Sensor ping.
 ///
-/// Callers set a beacon bearing via `setBeaconBearing(_:)` to place the
-/// ping in world space. PathFinder logic is retained for future use.
+/// **Key design**: Instead of rotating the HRTF listener (which Apple's
+/// API doesn't apply strongly enough), we keep the listener fixed at
+/// the origin facing forward and **move the source node** to the correct
+/// relative position each frame. When you turn right 90°, the source
+/// physically moves to x = -dist (hard left in the audio scene).
+///
+/// Head orientation is fused from:
+/// 1. Phone IMU (CMMotionManager) — primary, 60 Hz
+/// 2. Depth profile cross-correlation — supplementary, ~10 Hz
 @MainActor
 final class SpatialAudioEngine: ObservableObject {
 
@@ -149,11 +177,14 @@ final class SpatialAudioEngine: ObservableObject {
 
     @Published var hapticsEnabled: Bool = true
 
-    /// True when a beacon ping is actively placed.
     @Published var beaconActive: Bool = false
 
-    /// World-space bearing in degrees (0 = ahead, -90 = left, +90 = right).
+    /// World-space bearing where the ping was placed (degrees from
+    /// the heading at the moment of placement).
     @Published var beaconBearingDegrees: Float = 0
+
+    /// Current fused heading in degrees (0 = initial forward).
+    @Published var fusedHeadingDegrees: Float = 0
 
     // PathFinder results kept for future use / UI
     @Published var activePath: ClearPath? = nil
@@ -177,12 +208,24 @@ final class SpatialAudioEngine: ObservableObject {
     let haptics = NavigationHapticEngine()
 
     let pathFinder = PathFinder()
-
     let visionDetector = VisionDetector()
 
     private let motion = CMMotionManager()
-
     private let sampleRate: Double = 44100
+
+    // MARK: - Head tracking
+
+    /// World-space heading captured at the moment the beacon was placed.
+    private var headingAtPlacement: Float = 0
+
+    /// Raw IMU yaw in degrees (cumulative from CMMotionManager).
+    private var imuYawDegrees: Float = 0
+
+    /// Depth-based rotation estimator for supplementary tracking.
+    private let depthRotation = DepthRotationEstimator()
+
+    /// Accumulated depth-based yaw correction in degrees.
+    private var depthYawAccum: Float = 0
 
     // MARK: - Observers
 
@@ -213,13 +256,15 @@ final class SpatialAudioEngine: ObservableObject {
         isEnabled && avEngine.isRunning
     }
 
-    /// Place the shrine ping at a bearing. 0 = ahead, -90 = left, +90 = right.
+    /// Place the shrine ping at a bearing relative to where the user is
+    /// currently facing. 0 = ahead, -90 = left, +90 = right.
     func setBeaconBearing(_ degrees: Float) {
+        headingAtPlacement = fusedHeadingDegrees
         beaconBearingDegrees = degrees
         beaconActive = true
-        shrinePing.targetVolume = 0.65
+        shrinePing.targetVolume = 0.70
         updateShrineNodePosition()
-        print("[SpatialAudio] Shrine ping at \(degrees)°")
+        print("[SpatialAudio] Shrine ping placed at \(degrees)° from current heading (\(fusedHeadingDegrees)°)")
     }
 
     func clearBeacon() {
@@ -229,7 +274,8 @@ final class SpatialAudioEngine: ObservableObject {
         print("[SpatialAudio] Shrine ping cleared")
     }
 
-    /// Called each depth frame. PathFinder runs for UI; audio is bearing-only.
+    /// Called each depth frame. Runs PathFinder for UI and feeds the
+    /// depth rotation estimator for supplementary head tracking.
     func applyPerceptionFrame(
         depthMap: [Float],
         width: Int,
@@ -245,6 +291,15 @@ final class SpatialAudioEngine: ObservableObject {
         rawPaths = scanResult.paths
         activePath = scanResult.paths.first
 
+        // Depth-based rotation: cross-correlate depth profiles
+        let depthDelta = depthRotation.estimateYawDelta(profile: scanResult.profile)
+        depthYawAccum += depthDelta
+        // Blend into fused heading (low weight — IMU is primary)
+        fusedHeadingDegrees = imuYawDegrees + depthYawAccum * 0.15
+
+        // Update shrine node position based on new heading
+        updateShrineNodePosition()
+
         if hapticsEnabled {
             haptics.updatePolicy(
                 intensity: policyOutput.hapticIntensity,
@@ -256,24 +311,38 @@ final class SpatialAudioEngine: ObservableObject {
         detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
 
         if beaconActive {
-            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.65
+            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.70
         }
 
         updateCount += 1
     }
 
-    /// Glasses mode only affects whether depth comes from glasses vs phone.
-    /// Motion tracking is ALWAYS on for the shrine ping spatial audio.
     func setGlassesMode(_ glasses: Bool) {
         // Motion tracking stays on regardless — shrine ping needs it
     }
 
-    // MARK: - Shrine node positioning
+    // MARK: - Shrine node positioning (the core spatial logic)
 
+    /// Computes where the user has turned since placement, then places
+    /// the source node at the correct relative angle so HRTF pans it.
+    ///
+    /// Example: beacon at 0° (ahead), user turns right 90° →
+    /// relative angle = -90° → source at (-dist, 0, 0) = hard left ear.
     private func updateShrineNodePosition() {
         guard beaconActive else { return }
-        let rad = beaconBearingDegrees * Float.pi / 180
+
+        // World-space angle of the beacon
+        let worldAngle = headingAtPlacement + beaconBearingDegrees
+
+        // How much the user has turned since placement
+        let relativeAngle = worldAngle - fusedHeadingDegrees
+
+        // Convert to radians for 3D positioning
+        let rad = relativeAngle * Float.pi / 180
         let dist: Float = 4.0
+
+        // Place source in listener-relative coordinates:
+        // +x = right ear, -x = left ear, -z = forward
         shrineNode?.position = AVAudio3DPoint(
             x: sinf(rad) * dist,
             y: 0,
@@ -286,9 +355,9 @@ final class SpatialAudioEngine: ObservableObject {
     private func buildAudioGraph() {
         let mono = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
-        // NO reverb after HRTF — reverb adds diffuse reflections that
-        // destroy the precise ITD/ILD/spectral cues from binaural rendering.
-        // The ShrinePingVoice handles its own decay character.
+        // Listener stays fixed at origin, facing forward.
+        // We move the SOURCE to pan it — much more reliable than
+        // rotating the listener via listenerAngularOrientation.
         avEngine.attach(environment)
         avEngine.connect(environment, to: avEngine.mainMixerNode, format: nil)
 
@@ -296,6 +365,7 @@ final class SpatialAudioEngine: ObservableObject {
         else { environment.renderingAlgorithm = .HRTF }
 
         environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
+        environment.listenerAngularOrientation = AVAudio3DAngularOrientation(yaw: 0, pitch: 0, roll: 0)
         environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
         environment.distanceAttenuationParameters.referenceDistance = 0.5
         environment.distanceAttenuationParameters.maximumDistance = 20.0
@@ -336,17 +406,12 @@ final class SpatialAudioEngine: ObservableObject {
         }
         startMotionTracking()
         haptics.start()
-        print("[SpatialAudio] Started — motion tracking + shrine ping")
+        print("[SpatialAudio] Started — source-movement spatial + IMU + depth rotation")
     }
 
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            // .playAndRecord is required for Gemini mic input, but we
-            // disable the VoIP-style DSP (echo cancel, noise suppression)
-            // by using .measurement mode, which preserves the HRTF spectral
-            // cues. .allowBluetooth for AirPods, .mixWithOthers so
-            // system sounds don't kill our engine.
             try session.setCategory(.playAndRecord, mode: .measurement,
                                     options: [.mixWithOthers, .allowBluetooth])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
@@ -370,6 +435,8 @@ final class SpatialAudioEngine: ObservableObject {
         }
         motion.stopDeviceMotionUpdates()
         pathFinder.reset()
+        depthRotation.reset()
+        depthYawAccum = 0
         print("[SpatialAudio] Stopped")
     }
 
@@ -431,16 +498,18 @@ final class SpatialAudioEngine: ObservableObject {
     /// Current device heading in radians (from CMAttitude.yaw).
     private(set) var currentHeading: Float = 0
 
+    /// IMU updates at 60 Hz. Each update moves the source node.
     private func startMotionTracking() {
         guard motion.isDeviceMotionAvailable else { return }
         motion.deviceMotionUpdateInterval = 1.0 / 60
         motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
             guard let self, let att = data?.attitude else { return }
             self.currentHeading = Float(att.yaw)
-            self.environment.listenerAngularOrientation = AVAudio3DAngularOrientation(
-                yaw: Float(att.yaw * 180 / .pi),
-                pitch: Float(att.pitch * 180 / .pi),
-                roll: Float(att.roll * 180 / .pi))
+            self.imuYawDegrees = Float(att.yaw * 180.0 / .pi)
+            // Update fused heading (depth correction applied in applyPerceptionFrame)
+            self.fusedHeadingDegrees = self.imuYawDegrees + self.depthYawAccum * 0.15
+            // Move source node to match new head orientation
+            self.updateShrineNodePosition()
         }
     }
 }
