@@ -47,6 +47,8 @@ final class DepthInferenceEngine {
     // MARK: - Private helpers
 
     private func modelURL() -> URL? {
+        // Must match the .mlpackage name in the NavigatorImpaired target (repo includes ANE variant).
+        // For Float16 from Hugging Face instead, add DepthAnythingV2SmallF16.mlpackage to the target and set name to "DepthAnythingV2SmallF16".
         let name = "DepthAnythingV2SmallANE"
         return Bundle.main.url(forResource: name, withExtension: "mlmodelc")
             ?? Bundle.main.url(forResource: name, withExtension: "mlpackage")

@@ -19,6 +19,8 @@ class GeminiSessionViewModel: ObservableObject {
   private var lastVideoFrameTime: Date = .distantPast
   private var stateObservation: Task<Void, Never>?
 
+  weak var navigationController: NavigationController?
+
   var streamingMode: StreamingMode = .glasses
 
   func startSession() async {
@@ -88,8 +90,8 @@ class GeminiSessionViewModel: ObservableObject {
     await openClawBridge.checkConnection()
     openClawBridge.resetSession()
 
-    // Wire tool call handling
-    toolCallRouter = ToolCallRouter(bridge: openClawBridge)
+    // Wire tool call handling (navigationController must be set on this VM before startSession — see StreamSessionView `.task`)
+    toolCallRouter = ToolCallRouter(bridge: openClawBridge, navigationController: navigationController)
 
     geminiService.onToolCall = { [weak self] toolCall in
       guard let self else { return }
@@ -177,6 +179,7 @@ class GeminiSessionViewModel: ObservableObject {
   }
 
   func stopSession() {
+    navigationController?.stopNavigation()
     eventClient.disconnect()
     toolCallRouter?.cancelAll()
     toolCallRouter = nil

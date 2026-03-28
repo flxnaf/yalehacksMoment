@@ -57,6 +57,8 @@
 	<string>Used for voice conversations with the AI assistant while streaming from your glasses, and for depth benchmarking features.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Used to count steps and detect walking direction for obstacle proximity awareness.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>SightAssist needs your location for walking navigation.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Allows saving photos captured from your glasses.</string>
 	<key>UIApplicationSceneManifest</key>
