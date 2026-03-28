@@ -85,8 +85,24 @@ enum ToolCallStatus: Equatable {
 enum ToolDeclarations {
 
   static func allDeclarations() -> [[String: Any]] {
-    return [execute]
+    return [execute, navigateTo]
   }
+
+  static let navigateTo: [String: Any] = [
+    "name": "navigate_to",
+    "description": "Start walking navigation to a destination. Use when the user asks to navigate, walk to, go to, get directions, take me to, etc.",
+    "parameters": [
+      "type": "object",
+      "properties": [
+        "destination": [
+          "type": "string",
+          "description": "Destination name or address as spoken by the user."
+        ]
+      ],
+      "required": ["destination"]
+    ] as [String: Any],
+    "behavior": "BLOCKING"
+  ]
 
   static let execute: [String: Any] = [
     "name": "execute",

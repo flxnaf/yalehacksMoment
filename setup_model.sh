@@ -13,9 +13,15 @@ mkdir -p "$HF_HOME"
 # Hugging Face ships the Float16 variant; keep it under NavigatorImpaired/model so it is not
 # inside the file-system–synced app folder (avoids duplicate Core ML compiles if .cache appears).
 DEST="NavigatorImpaired/model/DepthAnythingV2SmallF16.mlpackage"
+APP_DIR="$(dirname "$DEST")"
+
+cleanup_hf_cache_in_app() {
+  rm -rf "$APP_DIR/.cache"
+}
 
 if [ -d "$DEST" ]; then
   echo "✅ Model already exists at $DEST"
+  cleanup_hf_cache_in_app
   exit 0
 fi
 
@@ -31,6 +37,8 @@ python3 -m huggingface_hub.cli.hf download \
   --repo-type model \
   --local-dir "$(dirname "$DEST")" \
   --include "DepthAnythingV2SmallF16.mlpackage/*"
+
+cleanup_hf_cache_in_app
 
 echo "✅ Model downloaded to $DEST"
 echo "Now open NavigatorImpaired/NavigatorImpaired.xcodeproj in Xcode."

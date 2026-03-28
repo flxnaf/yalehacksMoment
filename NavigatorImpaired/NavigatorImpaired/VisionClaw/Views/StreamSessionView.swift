@@ -11,9 +11,29 @@
 //
 //
 
+import AVFoundation
 import MWDATCore
 import SwiftUI
 import UIKit
+
+/// Owns `NavigationController` with API key from `Secrets` (see plan appendix D).
+@MainActor
+private final class NavControllerHolder: ObservableObject {
+  let navigation: NavigationController
+  init() {
+    navigation = NavigationController(
+      locationManager: LocationManager.shared,
+      googleMapsAPIKey: Secrets.googleMapsAPIKey
+    )
+  }
+}
+
+/// Holds `AVSpeechSynthesizer` for `NavigationController.onSpeakInstruction`.
+/// If TTS is silent or conflicts with Gemini Live audio, tune `AVAudioSession` / queue when `isModelSpeaking` is false (runtime tuning).
+@MainActor
+private final class NavTTSOwner: ObservableObject {
+  let synthesizer = AVSpeechSynthesizer()
+}
 
 struct StreamSessionView: View {
   let wearables: WearablesInterface
@@ -21,6 +41,8 @@ struct StreamSessionView: View {
   @StateObject private var viewModel: StreamSessionViewModel
   @StateObject private var geminiVM = GeminiSessionViewModel()
   @StateObject private var webrtcVM = WebRTCSessionViewModel()
+  @StateObject private var navHolder = NavControllerHolder()
+  @StateObject private var navTTSOwner = NavTTSOwner()
 
   init(wearables: WearablesInterface, wearablesVM: WearablesViewModel) {
     self.wearables = wearables
@@ -42,6 +64,16 @@ struct StreamSessionView: View {
       viewModel.geminiSessionVM = geminiVM
       viewModel.webrtcSessionVM = webrtcVM
       geminiVM.streamingMode = viewModel.streamingMode
+      let nav = navHolder.navigation
+      nav.onSpeakInstruction = { [weak navTTSOwner] text in
+        guard let navTTSOwner else { return }
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        navTTSOwner.synthesizer.speak(utterance)
+      }
+      LocationManager.shared.requestPermissionAndStart()
+      viewModel.navigationController = nav
+      geminiVM.navigationController = nav
     }
     .onChange(of: viewModel.streamingMode) { newMode in
       geminiVM.streamingMode = newMode

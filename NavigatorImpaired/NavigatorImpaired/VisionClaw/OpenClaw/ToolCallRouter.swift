@@ -3,10 +3,12 @@ import Foundation
 @MainActor
 class ToolCallRouter {
   private let bridge: OpenClawBridge
+  private weak var navigationController: NavigationController?
   private var inFlightTasks: [String: Task<Void, Never>] = [:]
 
-  init(bridge: OpenClawBridge) {
+  init(bridge: OpenClawBridge, navigationController: NavigationController? = nil) {
     self.bridge = bridge
+    self.navigationController = navigationController
   }
 
   /// Route a tool call from Gemini to OpenClaw. Calls sendResponse with the
@@ -22,8 +24,25 @@ class ToolCallRouter {
           callName, callId, String(describing: call.args))
 
     let task = Task { @MainActor in
-      let taskDesc = call.args["task"] as? String ?? String(describing: call.args)
-      let result = await bridge.delegateTask(task: taskDesc, toolName: callName)
+      let result: ToolResult
+      if callName == "navigate_to" {
+        let destination = call.args["destination"] as? String ?? ""
+        if destination.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          result = .failure("Missing destination for navigate_to.")
+        } else if let nav = navigationController {
+          do {
+            try await nav.startNavigation(to: destination)
+            result = .success("Navigation started to \(destination).")
+          } catch {
+            result = .failure(error.localizedDescription)
+          }
+        } else {
+          result = .failure("Navigation is not available.")
+        }
+      } else {
+        let taskDesc = call.args["task"] as? String ?? String(describing: call.args)
+        result = await bridge.delegateTask(task: taskDesc, toolName: callName)
+      }
 
       guard !Task.isCancelled else {
         NSLog("[ToolCall] Task %@ was cancelled, skipping response", callId)

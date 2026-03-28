@@ -28,6 +28,10 @@ class DepthBenchmarkViewModel: ObservableObject {
 
     let audioEngine = SpatialAudioEngine()
 
+    private let columnDepthEMA = ColumnDepthEMA()
+    private let navigationAudioPolicy = NavigationAudioPolicyEngine()
+    private let obstacleAnalyzer = ObstacleAnalyzer()
+
     private let engine = DepthInferenceEngine()
     private var latency = LatencyTracker()
     private var isInferring = false
@@ -187,9 +191,33 @@ class DepthBenchmarkViewModel: ObservableObject {
                         depthHeight: result.mapHeight
                     )
                     self.audioEngine.visionDetector.classifyScene(image: image)
-                    self.audioEngine.update(depthMap: result.depthMap,
-                                            width: result.mapWidth,
-                                            height: result.mapHeight)
+                    let obs = self.obstacleAnalyzer.analyze(
+                        depthData: result.depthMap,
+                        width: result.mapWidth,
+                        height: result.mapHeight,
+                        persons: self.audioEngine.detectedPersons,
+                        sceneLabel: self.audioEngine.detectedSceneLabel
+                    )
+                    let cols = self.columnDepthEMA.update(
+                        depthMap: result.depthMap,
+                        width: result.mapWidth,
+                        height: result.mapHeight
+                    )
+                    let policyIn = AudioPolicyInput(
+                        obstacle: obs,
+                        columnDepthsMeters: cols,
+                        navigationActive: false,
+                        guidance: nil,
+                        geminiSpeaking: false,
+                        verbalCueSpeaking: false
+                    )
+                    let policyOut = self.navigationAudioPolicy.evaluate(policyIn)
+                    self.audioEngine.applyPerceptionFrame(
+                        depthMap: result.depthMap,
+                        width: result.mapWidth,
+                        height: result.mapHeight,
+                        policyOutput: policyOut
+                    )
                     self.latency.record(ms)
                     self.latestMs = ms
                     self.avgMs = self.latency.average

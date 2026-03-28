@@ -159,7 +159,7 @@ struct StreamView: View {
       }
       .padding(.all, 24)
 
-      // Demo / SDK-gap path: glasses `touchEvents` not wired — corner tap still cancels (backup to overlay).
+      // Demo / SDK-gap path: glasses touchEvents may not cancel — corner tap backup for countdown.
       VStack {
         HStack {
           Spacer()

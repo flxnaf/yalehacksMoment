@@ -67,6 +67,8 @@ class StreamSessionViewModel: ObservableObject {
   // WebRTC Live streaming integration
   var webrtcSessionVM: WebRTCSessionViewModel?
 
+  weak var navigationController: NavigationController?
+
   // MARK: - Depth (Core ML, same feed as Gemini)
 
   @Published var depthFrame: UIImage?
@@ -89,9 +91,14 @@ class StreamSessionViewModel: ObservableObject {
   private var depthInferBusy = false
   private var depthLoadStarted = false
 
+  private let columnDepthEMA = ColumnDepthEMA()
+  private let navigationAudioPolicy = NavigationAudioPolicyEngine()
+  private let obstacleAnalyzer = ObstacleAnalyzer()
+  private let verbalCueController = NavigationVerbalCueController()
+
   // MARK: - Spatial Audio
   let audioEngine = SpatialAudioEngine()
-  /// Glasses frame source for fall detection / guardian snapshot.
+  /// Glasses / phone frame source for fall detection and guardian snapshot (`RayBanCameraManager`).
   let rayBanCameraManager = RayBanCameraManager()
   private var depthLatency = LatencyTracker()
 
@@ -150,6 +157,8 @@ class StreamSessionViewModel: ObservableObject {
     } else {
       depthFrame = nil
       resetDepthLatencyStats()
+      columnDepthEMA.reset()
+      navigationAudioPolicy.reset()
       audioEngine.isEnabled = false
     }
   }
@@ -203,9 +212,49 @@ class StreamSessionViewModel: ObservableObject {
               depthHeight: result.mapHeight
           )
           self.audioEngine.visionDetector.classifyScene(image: image)
-          self.audioEngine.update(depthMap: result.depthMap,
-                                  width: result.mapWidth,
-                                  height: result.mapHeight)
+
+          let obstacle: ObstacleAnalysis
+          if let nav = self.navigationController {
+            obstacle = nav.updatePerception(
+              depthMap: result.depthMap,
+              width: result.mapWidth,
+              height: result.mapHeight,
+              persons: self.audioEngine.detectedPersons,
+              sceneLabel: self.audioEngine.detectedSceneLabel
+            )
+          } else {
+            obstacle = self.obstacleAnalyzer.analyze(
+              depthData: result.depthMap,
+              width: result.mapWidth,
+              height: result.mapHeight,
+              persons: self.audioEngine.detectedPersons,
+              sceneLabel: self.audioEngine.detectedSceneLabel
+            )
+          }
+
+          let columnMeters = self.columnDepthEMA.update(
+            depthMap: result.depthMap,
+            width: result.mapWidth,
+            height: result.mapHeight
+          )
+          let geminiSpeaking = self.geminiSessionVM?.isModelSpeaking ?? false
+
+          let policyInput = AudioPolicyInput(
+            obstacle: obstacle,
+            columnDepthsMeters: columnMeters,
+            navigationActive: self.navigationController?.isNavigating ?? false,
+            guidance: self.navigationController?.currentGuidance,
+            geminiSpeaking: geminiSpeaking,
+            verbalCueSpeaking: self.verbalCueController.isSpeaking
+          )
+          let policyOut = self.navigationAudioPolicy.evaluate(policyInput)
+          self.audioEngine.applyPerceptionFrame(
+            depthMap: result.depthMap,
+            width: result.mapWidth,
+            height: result.mapHeight,
+            policyOutput: policyOut
+          )
+          self.verbalCueController.process(obstacle: obstacle, geminiSpeaking: geminiSpeaking)
           self.depthLatency.record(ms)
           self.depthLatestMs = ms
           self.depthAvgMs = self.depthLatency.average
@@ -515,6 +564,8 @@ class StreamSessionViewModel: ObservableObject {
       return "Camera permission denied. Please grant permission in Settings."
     case .hingesClosed:
       return "The hinges on the glasses were closed. Please open the hinges and try again."
+    case .thermalCritical:
+      return "Device is too hot. Let it cool down, then try again."
     @unknown default:
       return "An unknown streaming error occurred."
     }

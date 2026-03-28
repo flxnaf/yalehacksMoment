@@ -22,6 +22,8 @@ final class NavigationHapticEngine {
     private var isRunning = false
 
     private var surfaces: [SurfaceSnapshot] = []
+    /// When set, `tick` uses policy-driven intensity instead of zone surfaces.
+    private var policyIntensity: Float?
     private var tickTimer: Timer?
 
     // Time-multiplexing state
@@ -76,7 +78,13 @@ final class NavigationHapticEngine {
     // MARK: - Per-frame update (called from SpatialAudioEngine)
 
     func update(surfaces: [SurfaceSnapshot]) {
+        policyIntensity = nil
         self.surfaces = surfaces
+    }
+
+    /// Urgency-driven haptics from `NavigationAudioPolicy`. Clears zone-based mapping until `update(surfaces:)` is used again.
+    func updatePolicy(intensity: Float, speechActive: Bool) {
+        policyIntensity = speechActive ? 0 : max(0, min(1, intensity))
     }
 
     // MARK: - Continuous player
@@ -114,6 +122,15 @@ final class NavigationHapticEngine {
 
     private func tick() {
         guard isRunning, player != nil else { return }
+
+        if let p = policyIntensity {
+            if p < 0.02 {
+                sendParams(intensity: 0, sharpness: 0)
+            } else {
+                sendParams(intensity: p, sharpness: min(1, p * 0.9 + 0.1))
+            }
+            return
+        }
 
         guard !surfaces.isEmpty else {
             sendParams(intensity: 0, sharpness: 0)
