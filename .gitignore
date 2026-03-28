@@ -1,0 +1,29 @@
+# Xcode
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.moved-aside
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+*.resolved
+
+# CocoaPods
+Pods/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# CoreML model — too large for git, download with setup_model.sh
+**/*.mlpackage
+**/*.mlmodelc
+
+# Meta SDK — resolved automatically by Xcode SPM
+meta-wearables-dat-ios/
