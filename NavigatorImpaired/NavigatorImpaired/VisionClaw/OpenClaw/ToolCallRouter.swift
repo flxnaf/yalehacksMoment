@@ -4,11 +4,15 @@ import Foundation
 class ToolCallRouter {
   private let bridge: OpenClawBridge
   private weak var navigationController: NavigationController?
+  private weak var audioEngine: SpatialAudioEngine?
   private var inFlightTasks: [String: Task<Void, Never>] = [:]
 
-  init(bridge: OpenClawBridge, navigationController: NavigationController? = nil) {
+  init(bridge: OpenClawBridge,
+       navigationController: NavigationController? = nil,
+       audioEngine: SpatialAudioEngine? = nil) {
     self.bridge = bridge
     self.navigationController = navigationController
+    self.audioEngine = audioEngine
   }
 
   /// Route a tool call from Gemini to OpenClaw. Calls sendResponse with the
@@ -38,6 +42,21 @@ class ToolCallRouter {
           }
         } else {
           result = .failure("Navigation is not available.")
+        }
+      } else if callName == "set_ping" {
+        let bearing = (call.args["bearing"] as? NSNumber)?.floatValue ?? 0
+        if let engine = audioEngine {
+          engine.setBeaconBearing(bearing)
+          result = .success("Ping beacon placed at \(bearing)° from your current facing direction.")
+        } else {
+          result = .failure("Spatial audio engine is not available.")
+        }
+      } else if callName == "clear_ping" {
+        if let engine = audioEngine {
+          engine.clearBeacon()
+          result = .success("Ping beacon cleared.")
+        } else {
+          result = .failure("Spatial audio engine is not available.")
         }
       } else {
         let taskDesc = call.args["task"] as? String ?? String(describing: call.args)

@@ -85,7 +85,7 @@ enum ToolCallStatus: Equatable {
 enum ToolDeclarations {
 
   static func allDeclarations() -> [[String: Any]] {
-    return [execute, navigateTo]
+    return [execute, navigateTo, setPing, clearPing]
   }
 
   static let navigateTo: [String: Any] = [
@@ -100,6 +100,32 @@ enum ToolDeclarations {
         ]
       ],
       "required": ["destination"]
+    ] as [String: Any],
+    "behavior": "BLOCKING"
+  ]
+
+  static let setPing: [String: Any] = [
+    "name": "set_ping",
+    "description": "Place a spatial audio ping beacon at a direction relative to the user. The ping sounds like a Zelda shrine detector — a resonant chime that the user hears from that direction in 3D. Use when the user says things like 'I want to reach the end of the hall', 'ping that direction', 'guide me there', etc. The bearing is relative to where the user is currently facing: 0 = straight ahead, -90 = left, +90 = right, 180 = behind.",
+    "parameters": [
+      "type": "object",
+      "properties": [
+        "bearing": [
+          "type": "number",
+          "description": "Direction in degrees relative to user's current facing. 0 = ahead, -90 = left, +90 = right, 180 = behind."
+        ]
+      ],
+      "required": ["bearing"]
+    ] as [String: Any],
+    "behavior": "BLOCKING"
+  ]
+
+  static let clearPing: [String: Any] = [
+    "name": "clear_ping",
+    "description": "Remove the active spatial audio ping beacon. Use when the user arrives at the target, says 'stop pinging', 'cancel', or no longer needs directional guidance.",
+    "parameters": [
+      "type": "object",
+      "properties": [:] as [String: Any]
     ] as [String: Any],
     "behavior": "BLOCKING"
   ]

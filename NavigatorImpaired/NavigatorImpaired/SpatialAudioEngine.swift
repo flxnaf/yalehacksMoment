@@ -2,97 +2,71 @@ import AVFoundation
 import CoreMotion
 import UIKit
 
-// MARK: - Square ping (one column)
+// MARK: - Shrine Ping Voice (BOTW-inspired)
 
-/// 50 ms square-wave bursts at `rateHz`; silence between.
-final class SquarePingVoice {
-
-    var enabled: Bool = false
-    var volume: Float = 0
-    var rateHz: Float = 1
-    var freqHz: Float = 400
-
-    private let sr: Float
-    private let burstSamples: Int
-    private var burstLeft: Int = 0
-    private var silenceLeft: Int = 0
-    private var phase: Float = 0
-
-    init(sampleRate: Float, staggerIndex: Int) {
-        self.sr = sampleRate
-        self.burstSamples = max(1, Int(0.05 * sampleRate))
-        self.silenceLeft = (staggerIndex * max(1, Int(sampleRate / 25))) % max(1, Int(sampleRate / 2))
-    }
-
-    func resetScheduling() {
-        burstLeft = 0
-        silenceLeft = burstSamples
-    }
-
-    func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
-        for i in 0..<frameCount {
-            if !enabled || rateHz < 0.05 || volume < 0.001 {
-                buffer[i] = 0
-                continue
-            }
-            if burstLeft > 0 {
-                phase += 2 * freqHz / sr
-                if phase >= 1 { phase -= 1 }
-                let sq: Float = phase < 0.5 ? 1 : -1
-                buffer[i] = sq * volume
-                burstLeft -= 1
-            } else {
-                buffer[i] = 0
-                silenceLeft -= 1
-                if silenceLeft <= 0 {
-                    burstLeft = burstSamples
-                    let periodSamples = Int(sr / max(rateHz, 0.01))
-                    silenceLeft = max(0, periodSamples - burstSamples)
-                }
-            }
-        }
-    }
-}
-
-// MARK: - ChordBeaconVoice
-
-/// Continuous pad-chord beacon — C5 + E5 + G5 with detuned chorus,
-/// sub-octave, and built-in Schroeder reverb. Plays when a clear path is
-/// sustained; positioned at the gap azimuth via HRTF.
-final class ChordBeaconVoice {
+/// Emulates the Zelda: Breath of the Wild shrine detector ping.
+///
+/// Sound design: resonant metallic bell strike with shimmering inharmonic
+/// partials, slow LFO amplitude modulation, and a long reverberant tail.
+/// Pings repeat at `pingInterval` seconds. The ping gets louder/clearer
+/// when the listener faces the source (handled by HRTF positioning).
+final class ShrinePingVoice {
 
     var targetVolume: Float = 0
 
+    /// Seconds between ping onsets.
+    var pingInterval: Float = 2.4
+
     private let sr: Float
     private var currentVolume: Float = 0
-    private let slewRate: Float = 0.0015
+    private let slewRate: Float = 0.003
 
-    private let baseFreqs: [Float] = [523.25, 659.25, 783.99]
-    private let detune: Float = 1.5
+    // Bell partials: fundamental + inharmonic overtones (metallic quality)
+    private let partialFreqs: [Float] = [415.30, 831.6, 1038.0, 1245.6, 1661.2, 2076.5]
+    private let partialAmps:  [Float] = [1.0,    0.55,  0.35,   0.25,   0.15,   0.08]
+
+    // Each partial has its own decay rate (higher partials die faster)
+    private let partialDecays: [Float] = [1.8, 1.4, 1.0, 0.8, 0.6, 0.4]
+
     private var phases: [Float]
+    private var envelopes: [Float]
 
+    // Ping scheduling
+    private var samplesSincePing: Int = 0
+    private var pingActive: Bool = false
+
+    // Shimmer LFO
     private var lfoPhase: Float = 0
-    private let lfoRate:  Float = 3.8
-    private let lfoDepth: Float = 0.0035
+    private let lfoRate: Float = 5.5
+    private let lfoDepth: Float = 0.12
 
+    // Sub-bass undertone (the "presence" you feel)
     private var subPhase: Float = 0
-    private let subFreq:  Float = 261.63
+    private let subFreq: Float = 103.83
+    private var subEnvelope: Float = 0
 
-    private var lpState: Float = 0
-    private let lpAlpha: Float = 0.38
-
+    // Built-in comb reverb for that cavernous shrine feel
     private var combBuffers: [[Float]]
     private var combIndices: [Int]
     private let combLengths: [Int]
-    private let combFeedback: Float = 0.72
+    private let combFeedback: Float = 0.78
+
+    // Low-pass state for warmth
+    private var lpState: Float = 0
+    private let lpAlpha: Float = 0.42
 
     init(sampleRate: Float) {
         self.sr = sampleRate
-        self.phases = [Float](repeating: 0, count: 6)
-        let lengths = [1117, 1367, 1559, 1801]
+        self.phases = [Float](repeating: 0, count: partialFreqs.count)
+        self.envelopes = [Float](repeating: 0, count: partialFreqs.count)
+
+        let lengths = [1583, 1931, 2239, 2591]
         self.combLengths = lengths
         self.combBuffers = lengths.map { [Float](repeating: 0, count: $0) }
         self.combIndices = [Int](repeating: 0, count: lengths.count)
+
+        // Start ready to fire first ping immediately
+        self.samplesSincePing = Int(pingInterval * sampleRate)
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
@@ -101,38 +75,52 @@ final class ChordBeaconVoice {
         for i in 0..<frameCount {
             currentVolume += (tv - currentVolume) * slewRate
 
+            // Check if it's time for a new ping
+            samplesSincePing += 1
+            let intervalSamples = Int(pingInterval * sr)
+            if samplesSincePing >= intervalSamples && currentVolume > 0.001 {
+                triggerPing()
+                samplesSincePing = 0
+            }
+
+            // Shimmer LFO
             let lfo = 1.0 + lfoDepth * sinf(2 * .pi * lfoPhase)
             lfoPhase += lfoRate / sr
             if lfoPhase >= 1.0 { lfoPhase -= 1.0 }
 
+            // Additive synthesis of bell partials
             var dry: Float = 0
-            for n in 0..<3 {
-                let fA = (baseFreqs[n] - detune) * lfo
-                let fB = (baseFreqs[n] + detune) * lfo
-                let idxA = n * 2
-                let idxB = n * 2 + 1
+            for p in 0..<partialFreqs.count {
+                guard envelopes[p] > 0.001 else { continue }
 
-                let oscA = sinf(2 * .pi * phases[idxA])
-                       + 0.3 * sinf(4 * .pi * phases[idxA])
-                let oscB = sinf(2 * .pi * phases[idxB])
-                       + 0.3 * sinf(4 * .pi * phases[idxB])
+                let freq = partialFreqs[p] * lfo
+                let osc = sinf(2 * .pi * phases[p])
+                    + 0.3 * sinf(4 * .pi * phases[p])  // 2nd harmonic for richness
+                dry += osc * partialAmps[p] * envelopes[p]
 
-                dry += (oscA + oscB) * 0.5
+                phases[p] += freq / sr
+                if phases[p] >= 1.0 { phases[p] -= 1.0 }
 
-                phases[idxA] += fA / sr
-                phases[idxB] += fB / sr
-                if phases[idxA] >= 1.0 { phases[idxA] -= 1.0 }
-                if phases[idxB] >= 1.0 { phases[idxB] -= 1.0 }
+                // Exponential decay
+                let decayPerSample = expf(-1.0 / (partialDecays[p] * sr))
+                envelopes[p] *= decayPerSample
             }
 
-            let sub = sinf(2 * .pi * subPhase) * 0.25
-            subPhase += subFreq * lfo / sr
-            if subPhase >= 1.0 { subPhase -= 1.0 }
+            // Sub-bass undertone
+            if subEnvelope > 0.001 {
+                let sub = sinf(2 * .pi * subPhase) * 0.35 * subEnvelope
+                subPhase += subFreq / sr
+                if subPhase >= 1.0 { subPhase -= 1.0 }
+                dry += sub
+                subEnvelope *= expf(-1.0 / (2.2 * sr))
+            }
 
-            dry = (dry / 3.0 + sub) * currentVolume
+            dry *= currentVolume
 
+            // Low-pass for warmth
             lpState = lpAlpha * dry + (1 - lpAlpha) * lpState
 
+            // Comb reverb (Schroeder-style, long tail for shrine ambience)
             var wet: Float = 0
             for c in 0..<combLengths.count {
                 let idx = combIndices[c]
@@ -142,17 +130,32 @@ final class ChordBeaconVoice {
                 combIndices[c] = (idx + 1) % combLengths[c]
                 wet += delayed
             }
-            wet *= 0.20
+            wet *= 0.18
 
-            buffer[i] = lpState * 0.70 + wet
+            buffer[i] = lpState * 0.65 + wet
         }
+    }
+
+    private func triggerPing() {
+        // Reset all envelopes to 1.0 (new strike)
+        for p in 0..<envelopes.count {
+            envelopes[p] = 1.0
+            phases[p] = 0
+        }
+        subEnvelope = 1.0
+        subPhase = 0
     }
 }
 
 // MARK: - SpatialAudioEngine
 
-/// Spatial audio: obstacle pings (driven by policy) + chord beacon (driven
-/// by internal PathFinder sustain/EMA logic from the working earlier version).
+/// Spatial audio engine — produces a single BOTW-style shrine detector ping
+/// positioned in 3D via HRTF. The ping's apparent direction tracks with head
+/// rotation (CMMotionManager yaw updates the listener orientation).
+///
+/// Callers set a beacon bearing via `setBeaconBearing(_:)` to place the ping
+/// in world space. PathFinder logic is retained for future use but does not
+/// drive audio output.
 @MainActor
 final class SpatialAudioEngine: ObservableObject {
 
@@ -164,6 +167,14 @@ final class SpatialAudioEngine: ObservableObject {
 
     @Published var hapticsEnabled: Bool = true
 
+    /// True when a beacon ping is actively placed (navigation target set).
+    @Published var beaconActive: Bool = false
+
+    /// The world-space bearing (degrees, 0 = straight ahead at time of
+    /// placement, negative = left, positive = right) of the ping target.
+    @Published var beaconBearingDegrees: Float = 0
+
+    // PathFinder results kept for future use / UI
     @Published var activePath: ClearPath? = nil
     @Published var rawPaths: [ClearPath] = []
     @Published var depthProfile: [Float] = []
@@ -178,19 +189,14 @@ final class SpatialAudioEngine: ObservableObject {
     private let environment = AVAudioEnvironmentNode()
     private let reverb = AVAudioUnitReverb()
 
-    private let obstacleColumnCount = 6
-    private let columnAzimuthDegrees: [Float] = [-35, -21, -7, 7, 21, 35]
-    private var obstacleVoices: [SquarePingVoice] = []
-    private var obstacleNodes: [AVAudioSourceNode] = []
-
-    private let beaconVoice: ChordBeaconVoice
-    private var beaconNode: AVAudioSourceNode?
+    private let shrinePing: ShrinePingVoice
+    private var shrineNode: AVAudioSourceNode?
 
     let sightAssistSpeechPlayer = AVAudioPlayerNode()
 
     let haptics = NavigationHapticEngine()
 
-    private let pathFinder = PathFinder()
+    let pathFinder = PathFinder()
 
     let visionDetector = VisionDetector()
 
@@ -198,14 +204,6 @@ final class SpatialAudioEngine: ObservableObject {
     private var trackPhoneOrientation = true
 
     private let sampleRate: Double = 44100
-
-    // MARK: - Beacon sustain/EMA state (from old working version)
-
-    private let beaconRequiredFrames = 6
-    private let peakBeaconVol: Float = 0.40
-    private var beaconSustainCount = 0
-    private var beaconConfEMA: Float = 0
-    private var beaconAzimuthEMA: Float = 0.5
 
     // MARK: - Observers
 
@@ -219,7 +217,7 @@ final class SpatialAudioEngine: ObservableObject {
     // MARK: - Init
 
     init() {
-        beaconVoice = ChordBeaconVoice(sampleRate: Float(sampleRate))
+        shrinePing = ShrinePingVoice(sampleRate: Float(sampleRate))
         buildAudioGraph()
         registerSessionObservers()
     }
@@ -232,12 +230,35 @@ final class SpatialAudioEngine: ObservableObject {
 
     // MARK: - Public API
 
-    /// True when the HRTF graph is running (depth / navigation audio active).
+    /// True when the HRTF graph is running.
     var isSpatialPipelineRunning: Bool {
         isEnabled && avEngine.isRunning
     }
 
-    /// Called each depth frame. Obstacle pings from policy; beacon from internal PathFinder logic.
+    /// Place a beacon ping at a world-space bearing relative to the user's
+    /// current forward direction. The ping will be audible from that direction
+    /// and will track head rotation automatically via HRTF.
+    ///
+    /// - Parameter degrees: Bearing in degrees (0 = ahead, -90 = left, +90 = right).
+    func setBeaconBearing(_ degrees: Float) {
+        beaconBearingDegrees = degrees
+        beaconActive = true
+        shrinePing.targetVolume = 0.55
+        updateShrineNodePosition()
+        print("[SpatialAudio] Shrine ping set at \(degrees)°")
+    }
+
+    /// Remove the active beacon ping.
+    func clearBeacon() {
+        beaconActive = false
+        shrinePing.targetVolume = 0
+        beaconBearingDegrees = 0
+        print("[SpatialAudio] Shrine ping cleared")
+    }
+
+    /// Called each depth frame. Runs PathFinder (for future use / UI) and
+    /// vision detection. Does NOT drive audio — the shrine ping is entirely
+    /// bearing-based.
     func applyPerceptionFrame(
         depthMap: [Float],
         width: Int,
@@ -246,28 +267,15 @@ final class SpatialAudioEngine: ObservableObject {
     ) {
         guard isEnabled, avEngine.isRunning else { return }
 
-        // 1. Path scan + beacon (old working logic)
+        // PathFinder scan (retained for UI / future use)
         let wallHint = visionDetector.wallDetected
         let scanResult = pathFinder.scan(depthMap: depthMap, width: width, height: height,
                                          wallHint: wallHint)
         depthProfile = scanResult.profile
         rawPaths = scanResult.paths
-        applyBeacon(scanResult.paths, duck: policyOutput.duckNonSpeech)
+        activePath = scanResult.paths.first
 
-        // 2. Obstacle pings (from policy engine)
-        let duck = policyOutput.duckNonSpeech
-        for i in 0..<obstacleColumnCount {
-            let on = policyOutput.obstacleColumnsActive[i]
-            obstacleVoices[i].enabled = on
-            obstacleVoices[i].volume = policyOutput.obstacleVolume[i] * duck
-            obstacleVoices[i].rateHz = policyOutput.obstaclePingRateHz[i]
-            obstacleVoices[i].freqHz = policyOutput.obstaclePingFreqHz[i]
-            if !on {
-                obstacleVoices[i].resetScheduling()
-            }
-        }
-
-        // 3. Haptics
+        // Haptics (retained)
         if hapticsEnabled {
             haptics.updatePolicy(
                 intensity: policyOutput.hapticIntensity,
@@ -275,9 +283,14 @@ final class SpatialAudioEngine: ObservableObject {
             )
         }
 
-        // 4. Vision state for UI
+        // Vision state for UI
         detectedPersons = visionDetector.latestPersons
         detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
+
+        // Duck shrine ping during speech
+        if beaconActive {
+            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.55
+        }
 
         updateCount += 1
     }
@@ -293,45 +306,19 @@ final class SpatialAudioEngine: ObservableObject {
         }
     }
 
-    // MARK: - Beacon sustain/EMA logic (from old working version)
+    // MARK: - Shrine node positioning
 
-    private func applyBeacon(_ paths: [ClearPath], duck: Float) {
-        guard let best = paths.first, best.confidence > 0.08 else {
-            beaconSustainCount = max(0, beaconSustainCount - 3)
-            beaconConfEMA *= 0.82
-            beaconSustainProgress = Float(beaconSustainCount) / Float(beaconRequiredFrames)
-            beaconVoice.targetVolume = 0
-            activePath = nil
-            return
-        }
-
-        // If path jumps far from the EMA, snap azimuth to it
-        if abs(best.azimuthFraction - beaconAzimuthEMA) > 0.35 {
-            beaconAzimuthEMA = best.azimuthFraction
-        }
-
-        let alpha: Float = best.confidence > beaconConfEMA ? 0.35 : 0.18
-        beaconConfEMA    += alpha * (best.confidence      - beaconConfEMA)
-        beaconAzimuthEMA += 0.30  * (best.azimuthFraction - beaconAzimuthEMA)
-
-        beaconSustainCount = min(beaconSustainCount + 1, beaconRequiredFrames + 1)
-        beaconSustainProgress = min(1, Float(beaconSustainCount) / Float(beaconRequiredFrames))
-
-        let smoothed = ClearPath(azimuthFraction: beaconAzimuthEMA,
-                                  width: best.width,
-                                  avgDepth: best.avgDepth,
-                                  confidence: beaconConfEMA)
-
-        guard beaconSustainCount >= beaconRequiredFrames else {
-            beaconVoice.targetVolume = 0
-            activePath = smoothed
-            return
-        }
-
-        let audioX = (beaconAzimuthEMA - 0.5) * 3.6
-        beaconNode?.position = AVAudio3DPoint(x: audioX, y: 0, z: -1.5)
-        beaconVoice.targetVolume = min(peakBeaconVol, beaconConfEMA * 0.60) * duck
-        activePath = smoothed
+    /// Places the shrine ping source at the beacon bearing in 3D space.
+    /// Called when bearing is set and on each motion update.
+    private func updateShrineNodePosition() {
+        guard beaconActive else { return }
+        let rad = beaconBearingDegrees * Float.pi / 180
+        let dist: Float = 3.0
+        shrineNode?.position = AVAudio3DPoint(
+            x: sinf(rad) * dist,
+            y: 0,
+            z: -cosf(rad) * dist
+        )
     }
 
     // MARK: - Audio graph
@@ -339,8 +326,9 @@ final class SpatialAudioEngine: ObservableObject {
     private func buildAudioGraph() {
         let mono = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
-        reverb.loadFactoryPreset(.smallRoom)
-        reverb.wetDryMix = 6
+        // Reverb for spatial depth
+        reverb.loadFactoryPreset(.cathedral)
+        reverb.wetDryMix = 18
 
         avEngine.attach(environment)
         avEngine.attach(reverb)
@@ -353,41 +341,24 @@ final class SpatialAudioEngine: ObservableObject {
         environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
         environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
         environment.distanceAttenuationParameters.referenceDistance = 1.0
-        environment.distanceAttenuationParameters.maximumDistance = 15.0
-        environment.distanceAttenuationParameters.rolloffFactor = 0.4
+        environment.distanceAttenuationParameters.maximumDistance = 20.0
+        environment.distanceAttenuationParameters.rolloffFactor = 0.3
 
-        for i in 0..<obstacleColumnCount {
-            let voice = SquarePingVoice(sampleRate: Float(sampleRate), staggerIndex: i)
-            obstacleVoices.append(voice)
-
-            let node = AVAudioSourceNode(format: mono) { [voice] _, _, frameCount, abl in
-                let ptr = UnsafeMutableAudioBufferListPointer(abl)
-                if let buf = ptr.first?.mData?.assumingMemoryBound(to: Float.self) {
-                    voice.render(into: buf, frameCount: Int(frameCount))
-                }
-                return noErr
-            }
-            avEngine.attach(node)
-            avEngine.connect(node, to: environment, format: mono)
-            let deg = columnAzimuthDegrees[i] * Float.pi / 180
-            let dist: Float = 2.0
-            node.position = AVAudio3DPoint(x: -sin(deg) * dist, y: 0, z: -cos(deg) * dist)
-            obstacleNodes.append(node)
-        }
-
-        let bv = beaconVoice
-        let bNode = AVAudioSourceNode(format: mono) { [bv] _, _, frameCount, abl in
+        // Shrine ping source node
+        let voice = shrinePing
+        let node = AVAudioSourceNode(format: mono) { [voice] _, _, frameCount, abl in
             let ptr = UnsafeMutableAudioBufferListPointer(abl)
             if let buf = ptr.first?.mData?.assumingMemoryBound(to: Float.self) {
-                bv.render(into: buf, frameCount: Int(frameCount))
+                voice.render(into: buf, frameCount: Int(frameCount))
             }
             return noErr
         }
-        avEngine.attach(bNode)
-        avEngine.connect(bNode, to: environment, format: mono)
-        bNode.position = AVAudio3DPoint(x: 0, y: 0, z: -2)
-        beaconNode = bNode
+        avEngine.attach(node)
+        avEngine.connect(node, to: environment, format: mono)
+        node.position = AVAudio3DPoint(x: 0, y: 0, z: -3)
+        shrineNode = node
 
+        // SightAssist speech player (for AudioOrchestrator HRTF routing)
         avEngine.attach(sightAssistSpeechPlayer)
         avEngine.connect(sightAssistSpeechPlayer, to: environment, format: mono)
         sightAssistSpeechPlayer.position = AVAudio3DPoint(x: 0, y: 0, z: -1.0)
@@ -410,7 +381,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
         if trackPhoneOrientation { startMotionTracking() }
         haptics.start()
-        print("[SpatialAudio] Started — chord beacon + column pings")
+        print("[SpatialAudio] Started — shrine ping beacon")
     }
 
     private func configureSession() {
@@ -425,10 +396,8 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     private func stopEngine() {
-        obstacleVoices.forEach { $0.enabled = false; $0.volume = 0 }
-        beaconVoice.targetVolume = 0
-        beaconSustainCount = 0
-        beaconConfEMA = 0
+        shrinePing.targetVolume = 0
+        beaconActive = false
         activePath = nil
         rawPaths = []
         depthProfile = []
@@ -492,15 +461,14 @@ final class SpatialAudioEngine: ObservableObject {
             object: nil, queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            self.obstacleVoices.forEach { $0.enabled = false; $0.volume = 0 }
-            self.beaconVoice.targetVolume = 0
+            self.shrinePing.targetVolume = 0
             self.haptics.stop()
             self.avEngine.stop()
             self.motion.stopDeviceMotionUpdates()
         }
     }
 
-    /// Current device heading in radians (from CMAttitude.yaw). Read by room detector.
+    /// Current device heading in radians (from CMAttitude.yaw).
     private(set) var currentHeading: Float = 0
 
     private func startMotionTracking() {

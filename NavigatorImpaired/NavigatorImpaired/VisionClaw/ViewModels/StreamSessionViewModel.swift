@@ -255,6 +255,13 @@ class StreamSessionViewModel: ObservableObject {
             height: result.mapHeight,
             policyOutput: policyOut
           )
+
+          // Update shrine ping bearing from GPS navigation guidance
+          if let guidance = self.navigationController?.currentGuidance,
+             self.navigationController?.isNavigating == true {
+            self.audioEngine.setBeaconBearing(Float(guidance.beaconAzimuth))
+          }
+
           self.verbalCueController.process(
             activePath: self.audioEngine.activePath,
             allPaths: self.audioEngine.rawPaths,

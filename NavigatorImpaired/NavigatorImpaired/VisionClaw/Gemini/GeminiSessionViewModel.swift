@@ -20,6 +20,7 @@ class GeminiSessionViewModel: ObservableObject {
   private var stateObservation: Task<Void, Never>?
 
   weak var navigationController: NavigationController?
+  weak var audioEngine: SpatialAudioEngine?
 
   var streamingMode: StreamingMode = .glasses
 
@@ -91,7 +92,9 @@ class GeminiSessionViewModel: ObservableObject {
     openClawBridge.resetSession()
 
     // Wire tool call handling (navigationController must be set on this VM before startSession — see StreamSessionView `.task`)
-    toolCallRouter = ToolCallRouter(bridge: openClawBridge, navigationController: navigationController)
+    toolCallRouter = ToolCallRouter(bridge: openClawBridge,
+                                     navigationController: navigationController,
+                                     audioEngine: audioEngine)
 
     geminiService.onToolCall = { [weak self] toolCall in
       guard let self else { return }

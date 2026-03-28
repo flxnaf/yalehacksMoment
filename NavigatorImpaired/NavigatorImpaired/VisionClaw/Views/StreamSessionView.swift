@@ -74,6 +74,7 @@ struct StreamSessionView: View {
       LocationManager.shared.requestPermissionAndStart()
       viewModel.navigationController = nav
       geminiVM.navigationController = nav
+      geminiVM.audioEngine = viewModel.audioEngine
     }
     .onChange(of: viewModel.streamingMode) { newMode in
       geminiVM.streamingMode = newMode

@@ -1,12 +1,9 @@
 import AVFoundation
 import Foundation
 
-/// Short throttled spoken cues driven by PathFinder clear-path results.
-///
-/// Multi-path announcements ("Door to your left and right") use scene
-/// classification for context-aware labels. Single-path direction cues
-/// (veer left/right) have been removed — the beacon chord direction
-/// and Gemini voice guidance handle steering instead.
+/// Verbal cue controller — all path/direction cues have been removed.
+/// Audio navigation is now handled by the shrine ping beacon + Gemini voice.
+/// Room detection is retained for future use.
 @MainActor
 final class NavigationVerbalCueController: NSObject, ObservableObject {
 
@@ -14,21 +11,6 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
 
     private let synthesizer = AVSpeechSynthesizer()
     private var audioPlayer: AVAudioPlayer?
-
-    private var prevHadPath: Bool = false
-    private var prevAzimuth: Float = 0.5
-
-    private var lastClear: Date = .distantPast
-    private var lastNoPath: Date = .distantPast
-    private var lastMultiPath: Date = .distantPast
-
-    private let throttleClear: TimeInterval = 12
-    private let throttleNoPath: TimeInterval = 8
-    private let throttleMultiPath: TimeInterval = 10
-
-    /// Consecutive frames with no path before announcing "No clear path".
-    private let noPathFramesRequired = 15
-    private var noPathFrameCount = 0
 
     let roomDetector = RoomTransitionDetector()
 
@@ -38,13 +20,8 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
         ElevenLabsTTSClient.shared.prewarm()
     }
 
-    /// Call once per depth frame with the active clear path from the chord
-    /// beacon logic and the depth profile for room detection.
-    /// - Parameters:
-    ///   - activePath: The single best clear path from the beacon logic.
-    ///   - allPaths: All detected clear paths for multi-exit announcements.
-    ///   - doorDetected: Scene classifier thinks there is a door in the frame.
-    ///   - corridorDetected: Scene classifier thinks there is a corridor/hallway.
+    /// Call once per depth frame. Only room detection is active;
+    /// all path/direction verbal cues have been removed.
     func process(activePath: ClearPath?,
                  allPaths: [ClearPath] = [],
                  doorDetected: Bool = false,
@@ -52,7 +29,6 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
                  geminiSpeaking: Bool,
                  depthProfile: [Float] = [],
                  heading: Float = 0) {
-        // Room detection
         if !depthProfile.isEmpty {
             if let roomCue = roomDetector.update(
                 profile: depthProfile,
@@ -62,48 +38,6 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
                 if !geminiSpeaking { speak(roomCue) }
             }
         }
-
-        if geminiSpeaking { return }
-
-        let now = Date()
-        let hasPath = activePath != nil
-
-        // Multi-path announcements: when we see paths on both sides
-        if allPaths.count >= 2,
-           now.timeIntervalSince(lastMultiPath) > throttleMultiPath {
-            let hasLeft = allPaths.contains { $0.azimuthFraction < 0.4 }
-            let hasRight = allPaths.contains { $0.azimuthFraction > 0.6 }
-
-            if hasLeft && hasRight {
-                let label = doorDetected ? "Door" : (corridorDetected ? "Corridor" : "Path")
-                speak("\(label) to your left and right")
-                lastMultiPath = now
-                prevHadPath = hasPath
-                return
-            }
-        }
-
-        if let path = activePath {
-            noPathFrameCount = 0
-
-            if !prevHadPath, now.timeIntervalSince(lastClear) > throttleClear {
-                speak("Path clear")
-                lastClear = now
-            }
-
-            prevAzimuth = path.azimuthFraction
-        } else {
-            noPathFrameCount += 1
-
-            if noPathFrameCount >= noPathFramesRequired,
-               prevHadPath,
-               now.timeIntervalSince(lastNoPath) > throttleNoPath {
-                speak("No clear path")
-                lastNoPath = now
-            }
-        }
-
-        prevHadPath = hasPath
     }
 
     func reset() {
