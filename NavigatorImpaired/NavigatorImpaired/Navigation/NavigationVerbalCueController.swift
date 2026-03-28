@@ -41,9 +41,6 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
     }
 
     func reset() {
-        prevHadPath = false
-        prevAzimuth = 0.5
-        noPathFrameCount = 0
         synthesizer.stopSpeaking(at: .immediate)
         audioPlayer?.stop()
         isSpeaking = false
