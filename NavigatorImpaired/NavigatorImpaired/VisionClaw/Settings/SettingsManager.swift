@@ -13,6 +13,7 @@ final class SettingsManager {
     case openClawGatewayToken
     case geminiSystemPrompt
     case webrtcSignalingURL
+    case k2APIKey
     case speakerOutputEnabled
     case videoStreamingEnabled
     case proactiveNotificationsEnabled
@@ -64,6 +65,22 @@ final class SettingsManager {
     set { defaults.set(newValue, forKey: Key.webrtcSignalingURL.rawValue) }
   }
 
+  var k2APIKey: String? {
+    get {
+      let s = defaults.string(forKey: Key.k2APIKey.rawValue)
+      if let s, !s.isEmpty { return s }
+      let fallback = Secrets.k2APIKey
+      return fallback.isEmpty || fallback == "YOUR_K2_API_KEY_HERE" ? nil : fallback
+    }
+    set {
+      if let newValue {
+        defaults.set(newValue, forKey: Key.k2APIKey.rawValue)
+      } else {
+        defaults.removeObject(forKey: Key.k2APIKey.rawValue)
+      }
+    }
+  }
+
   // MARK: - Audio
 
   var speakerOutputEnabled: Bool {
@@ -89,7 +106,7 @@ final class SettingsManager {
 
   func resetAll() {
     for key in [Key.geminiAPIKey, .geminiSystemPrompt, .openClawHost, .openClawPort,
-                .openClawHookToken, .openClawGatewayToken, .webrtcSignalingURL,
+                .openClawHookToken, .openClawGatewayToken, .webrtcSignalingURL, .k2APIKey,
                 .speakerOutputEnabled, .videoStreamingEnabled,
                 .proactiveNotificationsEnabled] {
       defaults.removeObject(forKey: key.rawValue)
