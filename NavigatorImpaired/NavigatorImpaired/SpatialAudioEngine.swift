@@ -137,6 +137,9 @@ final class SpatialAudioEngine: ObservableObject {
     private let beaconVoice: BeaconSinePulseVoice
     private var beaconNode: AVAudioSourceNode?
 
+    /// Front-center HRTF source for `AudioOrchestrator` spatial TTS (`write` pipeline).
+    let sightAssistSpeechPlayer = AVAudioPlayerNode()
+
     let haptics = NavigationHapticEngine()
 
     private let pathFinder = PathFinder()
@@ -295,6 +298,15 @@ final class SpatialAudioEngine: ObservableObject {
         avEngine.connect(bNode, to: environment, format: mono)
         bNode.position = AVAudio3DPoint(x: 0, y: 0, z: -2)
         beaconNode = bNode
+
+        avEngine.attach(sightAssistSpeechPlayer)
+        avEngine.connect(sightAssistSpeechPlayer, to: environment, format: mono)
+        sightAssistSpeechPlayer.position = AVAudio3DPoint(x: 0, y: 0, z: -1.0)
+        if #available(iOS 15, *) {
+            sightAssistSpeechPlayer.renderingAlgorithm = .HRTFHQ
+        } else {
+            sightAssistSpeechPlayer.renderingAlgorithm = .HRTF
+        }
     }
 
     private func startEngine() {
