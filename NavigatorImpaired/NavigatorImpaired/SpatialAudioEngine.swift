@@ -2,38 +2,35 @@ import AVFoundation
 import CoreMotion
 import UIKit
 
-// MARK: - FMObstacleVoice
+// MARK: - SubBassObstacleVoice
 
-/// Soft, bell-like obstacle tone — warm and informational, never alarming.
+/// Deep, warm sub-bass hum with parking sensor beeping — felt more than heard.
+/// Proximity controls beep intervals: slow (far) → fast (close) → continuous (very close)
 ///
-/// Uses a 2:1 modulator:carrier ratio which produces even harmonics (bell/chime
-/// character) rather than the 1:1 ratio's metallic edge. The modulation index
-/// is kept very low (0.10–0.45) so the tone stays round and musical.
-///
-/// Proximity controls:
-///   - **Mod index**: 0.10 (near-pure sine) → 0.45 (gentle bell shimmer)
-///   - **Beep interval**: 2.0s (far) → 0.1s (close) → continuous (very close)
-///   - **Volume**: smooth ramp, never jarring
-///
-/// LP filter at ~2 kHz removes any remaining harshness.
-final class FMObstacleVoice {
+/// A triangle wave (softer than sine, no harsh partials) run through tanh
+/// waveshaping for analog warmth, then buried under three cascaded LP filters.
+/// The result is a smooth, pillowy low-end presence with parking sensor timing.
+final class SubBassObstacleVoice {
 
     var targetVolume:    Float = 0
-    var targetModIndex:  Float = 0.10
+    var targetBrightness: Float = 0.15
     var targetBeepInterval: Float = 2.0  // seconds between beeps
 
-    private let carrierFreq: Float
+    private let baseFreq: Float
     private let sr: Float
 
-    private var carrierPhase: Float = 0
-    private var modPhase:     Float = 0
+    private var phase: Float = 0
+    private var subPhase: Float = 0
 
-    private var currentVolume:    Float = 0
-    private var currentModIndex:  Float = 0.10
+    private var currentVolume:     Float = 0
+    private var currentBrightness: Float = 0.15
     private var currentBeepInterval: Float = 2.0
+    private var breathPhase: Float = 0
 
-    private var lpState: Float = 0
-    private let lpAlpha: Float = 0.22          // gentler LP — warmer rolloff
+    // Three cascaded LP stages for an extremely dark rolloff
+    private var lp1: Float = 0
+    private var lp2: Float = 0
+    private var lp3: Float = 0
     private let slewRate: Float = 0.0004
 
     // Beeping state
@@ -42,55 +39,72 @@ final class FMObstacleVoice {
     private let beepDuration: Float = 0.15    // 150ms beep duration
 
     init(carrierFreq: Float, sampleRate: Float) {
-        self.carrierFreq = carrierFreq
+        self.baseFreq = carrierFreq
         self.sr = sampleRate
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
         let tv  = targetVolume
-        let tmi = targetModIndex
+        let tb  = targetBrightness
         let tbi = targetBeepInterval
 
         for i in 0..<frameCount {
-            currentVolume    += (tv  - currentVolume)    * slewRate
-            currentModIndex  += (tmi - currentModIndex)  * slewRate
+            currentVolume     += (tv  - currentVolume)     * slewRate
+            currentBrightness += (tb  - currentBrightness) * slewRate
             currentBeepInterval += (tbi - currentBeepInterval) * slewRate
 
             // Update beep timer
             beepTimer += 1.0 / sr
-            
+
             // Check if we should start a new beep
             if beepTimer >= currentBeepInterval {
                 beepTimer = 0
                 isBeeping = true
             }
-            
+
             // Check if current beep should end
             if isBeeping && beepTimer >= beepDuration {
                 isBeeping = false
             }
-            
+
             // Generate audio only during beep, or continuously if interval is very short
             let shouldPlay = isBeeping || currentBeepInterval < 0.05
 
             var sample: Float = 0
             if shouldPlay && currentVolume > 0.01 {
-                // FM with 2:1 ratio — bell/chime character, not metallic
-                let modFreq = carrierFreq * 2.0
-                let mod = currentModIndex * sinf(2 * .pi * modPhase)
-                modPhase += modFreq / sr
-                if modPhase >= 1.0 { modPhase -= 1.0 }
+                // Slow breath — barely perceptible volume swell
+                breathPhase += 0.4 / sr  // Fixed breath rate for beeps
+                if breathPhase >= 1.0 { breathPhase -= 1.0 }
+                let breath: Float = 0.92 + 0.08 * sinf(2 * .pi * breathPhase)
 
-                let carrier = sinf(2 * .pi * carrierPhase + mod)
-                carrierPhase += carrierFreq / sr
-                if carrierPhase >= 1.0 { carrierPhase -= 1.0 }
+                // Triangle wave: 4|2·phase - 1| - 1, range [-1, 1]
+                let tri = 4.0 * abs(2.0 * phase - 1.0) - 1.0
+                phase += baseFreq / sr
+                if phase >= 1.0 { phase -= 1.0 }
 
-                sample = carrier * currentVolume
+                // Sub-octave sine for extra weight
+                let sub = sinf(2 * .pi * subPhase)
+                subPhase += (baseFreq * 0.5) / sr
+                if subPhase >= 1.0 { subPhase -= 1.0 }
+
+                // Mix: triangle + sub, weighted by brightness
+                let dry = tri * 0.6 + sub * (0.4 + currentBrightness * 0.15)
+
+                // Tanh soft-saturation — rounds off edges, adds analog warmth
+                let drive: Float = 1.4 + currentBrightness * 0.6
+                let saturated = tanhf(dry * drive)
+
+                sample = saturated * breath * currentVolume
+
+                // Triple cascaded LP — extremely dark, sub-bass only
+                let alpha: Float = 0.10 + currentBrightness * 0.04
+                lp1 = alpha * sample + (1 - alpha) * lp1
+                lp2 = alpha * lp1 + (1 - alpha) * lp2
+                lp3 = alpha * lp2 + (1 - alpha) * lp3
+                sample = lp3
             }
 
-            // LP filter
-            lpState = lpAlpha * sample + (1 - lpAlpha) * lpState
-            buffer[i] = lpState
+            buffer[i] = sample
         }
     }
 }
@@ -251,6 +265,11 @@ final class SpatialAudioEngine: ObservableObject {
     /// 0→1 fraction of the required sustain window.
     @Published var beaconSustainProgress: Float = 0
 
+    /// Detected persons for UI overlay (bounding boxes in Vision normalised coords).
+    @Published var detectedPersons: [PersonDetection] = []
+    /// Latest scene classification label.
+    @Published var detectedSceneLabel: String?
+
     // MARK: - Audio graph
 
     private let avEngine    = AVAudioEngine()
@@ -259,10 +278,10 @@ final class SpatialAudioEngine: ObservableObject {
 
     // Voice pool — 8 repositionable obstacle voices
     private let poolSize = 8
-    private var poolVoices: [FMObstacleVoice] = []
+    private var poolVoices: [SubBassObstacleVoice] = []
     private var poolNodes:  [AVAudioSourceNode] = []
-    /// Carrier frequencies spread across a warm octave (F3 → D4).
-    private let poolFrequencies: [Float] = [349, 370, 392, 415, 440, 466, 494, 523]
+    /// Carrier frequencies spread across a warm sub-bass octave (F1 → D2).
+    private let poolFrequencies: [Float] = [43.65, 46.25, 49.00, 51.91, 55.00, 58.27, 61.74, 65.41]
     /// Currently assigned world bearing per pool slot (nil = unassigned).
     private var poolAssignment: [Float?] = []
 
@@ -276,6 +295,11 @@ final class SpatialAudioEngine: ObservableObject {
     // MARK: - World map (360° obstacle memory)
 
     private let worldMap = WorldObstacleMap()
+    private let pathFinder = PathFinder()
+
+    // MARK: - Vision (person/object detection)
+
+    let visionDetector = VisionDetector()
 
     // MARK: - Zone tracking (for haptics only)
 
@@ -330,12 +354,26 @@ final class SpatialAudioEngine: ObservableObject {
     func update(depthMap: [Float], width: Int, height: Int) {
         guard isEnabled, avEngine.isRunning else { return }
 
-        let scanResult = PathFinder.scan(depthMap: depthMap, width: width, height: height)
+        let scanResult = pathFinder.scan(depthMap: depthMap, width: width, height: height)
         depthProfile = scanResult.profile
         rawPaths = scanResult.paths
 
+        // Boost world map bins where persons are detected
+        var boostedProfile = scanResult.profile
+        for person in visionDetector.latestPersons {
+            if let depth = person.estimatedDepth {
+                let col = min(PathFinder.columnCount - 1,
+                              max(0, Int(person.azimuthFraction * Float(PathFinder.columnCount))))
+                boostedProfile[col] = max(boostedProfile[col], depth * 1.3)
+                if col > 0 { boostedProfile[col - 1] = max(boostedProfile[col - 1], depth * 1.1) }
+                if col < PathFinder.columnCount - 1 {
+                    boostedProfile[col + 1] = max(boostedProfile[col + 1], depth * 1.1)
+                }
+            }
+        }
+
         // 360° world-space obstacle audio
-        let obstacles = worldMap.update(profile: scanResult.profile, heading: currentHeading)
+        let obstacles = worldMap.update(profile: boostedProfile, heading: currentHeading)
         applyVoicePool(obstacles)
 
         // Beacon
@@ -347,6 +385,10 @@ final class SpatialAudioEngine: ObservableObject {
             let surfaces = memory.update(rawZones: rawZones)
             haptics.update(surfaces: surfaces)
         }
+
+        // Publish vision results for UI overlay
+        detectedPersons = visionDetector.latestPersons
+        detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
 
         updateCount += 1
         if updateCount % 45 == 1 { logDiagnostics(obstacles: obstacles, paths: scanResult.paths) }
@@ -392,7 +434,7 @@ final class SpatialAudioEngine: ObservableObject {
         // --- Voice pool (8 repositionable FM obstacle sources) ---
         for i in 0..<poolSize {
             let freq = poolFrequencies[i]
-            let voice = FMObstacleVoice(carrierFreq: freq, sampleRate: Float(sampleRate))
+            let voice = SubBassObstacleVoice(carrierFreq: freq, sampleRate: Float(sampleRate))
             poolVoices.append(voice)
 
             let node = AVAudioSourceNode(format: mono) { [voice] _, _, frameCount, abl in
@@ -469,6 +511,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
         motion.stopDeviceMotionUpdates()
         worldMap.reset()
+        pathFinder.reset()
         memory.reset()
         print("[SpatialAudio] Stopped")
     }
@@ -578,7 +621,7 @@ final class SpatialAudioEngine: ObservableObject {
         // Silence unassigned voices
         for pi in 0..<poolSize where !used.contains(pi) {
             poolVoices[pi].targetVolume    = 0
-            poolVoices[pi].targetModIndex  = 0.15
+            poolVoices[pi].targetBrightness = 0.15
             poolVoices[pi].targetBeepInterval = 2.0  // Default to slow beeps when silencing
             poolAssignment[pi] = nil
         }
@@ -589,7 +632,7 @@ final class SpatialAudioEngine: ObservableObject {
             poolAssignment[pi] = obs.bearing
 
             poolVoices[pi].targetVolume    = obstacleVolume(obs.depth)
-            poolVoices[pi].targetModIndex  = obstacleModIndex(obs.depth)
+            poolVoices[pi].targetBrightness = obstacleBrightness(obs.depth)
             poolVoices[pi].targetBeepInterval = obstacleBeepInterval(obs.depth)
 
             let pos = bearingToAudioPosition(bearing: obs.bearing, depth: obs.depth)
@@ -625,34 +668,36 @@ final class SpatialAudioEngine: ObservableObject {
     // MARK: - Obstacle parameter curves
 
     private func obstacleVolume(_ d: Float) -> Float {
-        let t = max(0, (d - 0.15) / 0.75)
-        return peakObstacleVol * t * t
+        // Only audible when depth > 0.50 (very close). Cubic curve = silence
+        // for distant/moderate obstacles, ramps steeply for imminent ones.
+        let t = max(0, (d - 0.50) / 0.50)
+        return peakObstacleVol * t * t * t
     }
 
-    private func obstacleModIndex(_ d: Float) -> Float {
-        let t = max(0, min(1, (d - 0.15) / 0.70))
-        return 0.10 + t * 0.35
+    private func obstacleBrightness(_ d: Float) -> Float {
+        let t = max(0, min(1, (d - 0.50) / 0.50))
+        return 0.15 + t * 0.50
     }
 
     private func obstacleBeepInterval(_ d: Float) -> Float {
-        if d < 0.3 {
-            // Far away: slow beeps (2.0s interval)
-            return 2.0
-        } else if d < 0.7 {
-            // Medium distance: faster beeps (0.5s to 2.0s)
-            let t = (d - 0.3) / 0.4  // 0 to 1 over this range
-            return 2.0 - t * 1.5     // 2.0s down to 0.5s
+        if d < 0.6 {
+            // Very close but not critical: medium beeps (1.0s interval)
+            return 1.0
+        } else if d < 0.8 {
+            // Critical distance: faster beeps (0.3s to 1.0s)
+            let t = (d - 0.6) / 0.2  // 0 to 1 over this range
+            return 1.0 - t * 0.7     // 1.0s down to 0.3s
         } else {
-            // Close: very fast beeps or continuous (0.1s to continuous)
-            let t = (d - 0.7) / 0.3  // 0 to 1 over this range
-            return 0.5 - t * 0.4     // 0.5s down to 0.1s (continuous when < 0.05s)
+            // Very critical: very fast beeps or continuous (0.1s to continuous)
+            let t = (d - 0.8) / 0.2  // 0 to 1 over this range
+            return 0.3 - t * 0.2     // 0.3s down to 0.1s (continuous when < 0.05s)
         }
     }
 
     // MARK: - Path beacon
 
     private func applyBeacon(_ paths: [ClearPath]) {
-        guard let best = paths.first, best.confidence > 0.15 else {
+        guard let best = paths.first, best.confidence > 0.08 else {
             beaconSustainCount = max(0, beaconSustainCount - 3)
             beaconConfEMA *= 0.82
             beaconSustainProgress = Float(beaconSustainCount) / Float(beaconRequiredFrames)
@@ -661,13 +706,15 @@ final class SpatialAudioEngine: ObservableObject {
             return
         }
 
-        if abs(best.azimuthFraction - beaconAzimuthEMA) > 0.30 {
-            beaconSustainCount = 0
+        // If the path jumps far from the EMA, snap the EMA to it instead of
+        // resetting sustain — this way off-centre gaps still activate.
+        if abs(best.azimuthFraction - beaconAzimuthEMA) > 0.35 {
+            beaconAzimuthEMA = best.azimuthFraction
         }
 
-        let alpha: Float = best.confidence > beaconConfEMA ? 0.30 : 0.15
+        let alpha: Float = best.confidence > beaconConfEMA ? 0.35 : 0.18
         beaconConfEMA    += alpha * (best.confidence      - beaconConfEMA)
-        beaconAzimuthEMA += 0.20  * (best.azimuthFraction - beaconAzimuthEMA)
+        beaconAzimuthEMA += 0.30  * (best.azimuthFraction - beaconAzimuthEMA)
 
         beaconSustainCount = min(beaconSustainCount + 1, beaconRequiredFrames + 1)
         beaconSustainProgress = min(1, Float(beaconSustainCount) / Float(beaconRequiredFrames))

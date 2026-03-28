@@ -32,6 +32,16 @@ struct DepthBenchmarkView: View {
                     .allowsHitTesting(false)
             }
 
+            GeometryReader { geo in
+                VisionOverlay(
+                    persons: vm.audioEngine.detectedPersons,
+                    sceneLabel: vm.audioEngine.detectedSceneLabel,
+                    frameSize: geo.size
+                )
+            }
+            .allowsHitTesting(false)
+            .ignoresSafeArea()
+
             VStack {
                 topBar
                 Spacer()
