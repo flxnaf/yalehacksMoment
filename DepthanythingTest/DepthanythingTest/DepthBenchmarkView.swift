@@ -138,6 +138,23 @@ struct DepthBenchmarkView: View {
                     .background(.ultraThinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
+
+                Button {
+                    vm.audioEngine.hapticsEnabled.toggle()
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: vm.audioEngine.hapticsEnabled
+                              ? "iphone.radiowaves.left.and.right.circle.fill"
+                              : "iphone.radiowaves.left.and.right.circle")
+                            .font(.system(size: 18))
+                            .foregroundColor(vm.audioEngine.hapticsEnabled ? .cyan : .white)
+                        Text("Haptics").font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
             }
         }
         .padding(.horizontal, 16).padding(.top, 8)

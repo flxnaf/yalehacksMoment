@@ -30,12 +30,16 @@ class PhoneCameraManager: NSObject, ObservableObject {
     }
 
     private func setup() {
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+        let device = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back)
+                  ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        guard let device,
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else {
             DispatchQueue.main.async { self.statusMessage = "Camera unavailable" }
             return
         }
+        let lensName = device.deviceType == .builtInUltraWideCamera ? "0.5×" : "1×"
+        print("[Cam] Using \(lensName) lens")
 
         let output = AVCaptureVideoDataOutput()
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]

@@ -17,14 +17,13 @@ enum DepthZone: Int, CaseIterable, Hashable {
         }
     }
 
-    /// Carrier frequency for the tremolo oscillator.
-    /// 220–330 Hz (musical A3–E4 range) reproduces clearly on earphones and
-    /// is distinct enough per zone to be told apart without HRTF.
+    /// Carrier frequency for the FM obstacle voice.
+    /// Spread across F#3–C4 so each zone has a distinct pitch even without HRTF.
     var carrierFrequency: Float {
         switch self {
-        case .middleLeft:   return 220   // A3 — warm left signal
-        case .middleCenter: return 275   // C#4 — neutral center
-        case .middleRight:  return 330   // E4  — brighter right signal
+        case .middleLeft:   return 185   // F#3 — warm low
+        case .middleCenter: return 220   // A3  — neutral center
+        case .middleRight:  return 262   // C4  — slightly brighter
         }
     }
 }
