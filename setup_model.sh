@@ -10,7 +10,9 @@ cd "$SCRIPT_ROOT"
 export HF_HOME="$SCRIPT_ROOT/.hf-home"
 mkdir -p "$HF_HOME"
 
-DEST="DepthanythingTest/DepthanythingTest/DepthAnythingV2SmallF16.mlpackage"
+# Hugging Face ships the Float16 variant; keep it under NavigatorImpaired/model so it is not
+# inside the file-system–synced app folder (avoids duplicate Core ML compiles if .cache appears).
+DEST="NavigatorImpaired/model/DepthAnythingV2SmallF16.mlpackage"
 
 if [ -d "$DEST" ]; then
   echo "✅ Model already exists at $DEST"
@@ -31,4 +33,4 @@ python3 -m huggingface_hub.cli.hf download \
   --include "DepthAnythingV2SmallF16.mlpackage/*"
 
 echo "✅ Model downloaded to $DEST"
-echo "Now open DepthanythingTest/DepthanythingTest.xcodeproj in Xcode."
+echo "Now open NavigatorImpaired/NavigatorImpaired.xcodeproj in Xcode."

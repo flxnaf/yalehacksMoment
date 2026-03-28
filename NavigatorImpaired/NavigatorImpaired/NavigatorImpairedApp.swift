@@ -30,6 +30,8 @@ struct NavigatorImpairedApp: App {
         #if canImport(MWDATMockDevice)
         _debugMenuViewModel = StateObject(wrappedValue: DebugMenuViewModel(mockDeviceKit: MockDeviceKit.shared))
         #endif
+
+        FallDetectionCoordinator.shared.start()
     }
 
     var body: some Scene {

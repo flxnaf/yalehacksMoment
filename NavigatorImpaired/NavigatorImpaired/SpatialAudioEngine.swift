@@ -263,6 +263,9 @@ final class SpatialAudioEngine: ObservableObject {
     private let beaconVoice: ChordBeaconVoice
     private var beaconNode: AVAudioSourceNode?
 
+    /// Front-center 3D source for SightAssist speech (HRTF), fed by `AudioOrchestrator` via `write(_:toBufferCallback:)`.
+    let sightAssistSpeechPlayer = AVAudioPlayerNode()
+
     // MARK: - Haptics
 
     let haptics = NavigationHapticEngine()
@@ -324,6 +327,11 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     // MARK: - Public API
+
+    /// True when the HRTF graph is running (depth / navigation audio active).
+    var isSpatialPipelineRunning: Bool {
+        isEnabled && avEngine.isRunning
+    }
 
     /// Called from the inference loop every frame with the latest depth map.
     func update(depthMap: [Float], width: Int, height: Int) {
@@ -438,6 +446,15 @@ final class SpatialAudioEngine: ObservableObject {
         avEngine.connect(bNode, to: environment, format: mono)
         bNode.position = AVAudio3DPoint(x: 0, y: 0, z: -1.5)
         beaconNode = bNode
+
+        avEngine.attach(sightAssistSpeechPlayer)
+        avEngine.connect(sightAssistSpeechPlayer, to: environment, format: mono)
+        sightAssistSpeechPlayer.position = AVAudio3DPoint(x: 0, y: 0, z: -1.0)
+        if #available(iOS 15, *) {
+            sightAssistSpeechPlayer.renderingAlgorithm = .HRTFHQ
+        } else {
+            sightAssistSpeechPlayer.renderingAlgorithm = .HRTF
+        }
     }
 
     // MARK: - Engine lifecycle
