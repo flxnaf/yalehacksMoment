@@ -21,6 +21,7 @@ struct StreamView: View {
   @ObservedObject var wearablesVM: WearablesViewModel
   @ObservedObject var geminiVM: GeminiSessionViewModel
   @ObservedObject var webrtcVM: WebRTCSessionViewModel
+  @ObservedObject private var guardianAlerts = GuardianAlertManager.shared
 
   private var depthShow: Bool {
     viewModel.depthInferenceEnabled && viewModel.showDepthOverlay
@@ -75,6 +76,9 @@ struct StreamView: View {
       }
 
       VStack(alignment: .leading, spacing: 8) {
+        #if DEBUG
+        sightAssistTestPanel
+        #endif
         if viewModel.depthInferenceEnabled {
           HStack(alignment: .top, spacing: 12) {
             if viewModel.depthModelLoaded, viewModel.depthModelError == nil {
@@ -154,6 +158,57 @@ struct StreamView: View {
         ControlsView(viewModel: viewModel, geminiVM: geminiVM, webrtcVM: webrtcVM)
       }
       .padding(.all, 24)
+
+      // Glasses touchEvents may not cancel — corner tap backup for countdown.
+      VStack {
+        HStack {
+          Spacer()
+          Button {
+            FallDetectionCoordinator.shared.handleDoubleTap()
+          } label: {
+            Text("Cancel Alert")
+          }
+          .opacity(0.01)
+          .frame(width: 96, height: 96)
+          .accessibilityLabel("Cancel Alert")
+          .accessibilityHint("Cancels an active fall alert countdown")
+        }
+        Spacer()
+      }
+
+      if guardianAlerts.isCountdownActive {
+        Color.black.opacity(0.62)
+          .ignoresSafeArea()
+          .accessibilityElement(children: .contain)
+        VStack(spacing: 20) {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 44))
+            .foregroundStyle(.orange)
+            .accessibilityHidden(true)
+          Text("Fall alert countdown")
+            .font(.title2.weight(.bold))
+            .foregroundColor(.white)
+          Text("Double-tap Cancel or use the button below to stop the alert.")
+            .font(.subheadline)
+            .foregroundColor(.white.opacity(0.9))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 24)
+          Button {
+            FallDetectionCoordinator.shared.handleDoubleTap()
+          } label: {
+            Text("Cancel alert")
+              .font(.title3.weight(.semibold))
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 18)
+          }
+          .buttonStyle(.borderedProminent)
+          .tint(.red)
+          .padding(.horizontal, 28)
+          .accessibilityLabel("Cancel fall alert")
+          .accessibilityHint("Stops the countdown and does not notify your guardian")
+        }
+        .padding(.bottom, 40)
+      }
     }
     .onDisappear {
       Task {
@@ -195,6 +250,58 @@ struct StreamView: View {
       Text(webrtcVM.errorMessage ?? "")
     }
   }
+
+  #if DEBUG
+  /// Debug builds: exercise guardian / SOS without physical falls.
+  private var sightAssistTestPanel: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(spacing: 8) {
+        Image(systemName: "figure.fall.circle.fill")
+          .font(.title2)
+          .foregroundStyle(.cyan)
+        Text("Guardian — test")
+          .font(.subheadline.weight(.semibold))
+          .foregroundColor(.white)
+      }
+
+      Text(
+        "Fall detection runs in the background. Test SOS runs the full countdown and send pipeline; Cancel stops an active countdown."
+      )
+      .font(.caption)
+      .foregroundColor(.white.opacity(0.88))
+      .fixedSize(horizontal: false, vertical: true)
+
+      VStack(spacing: 8) {
+        Button {
+          FallDetectionCoordinator.shared.triggerManualSOS()
+        } label: {
+          Label("Test SOS / guardian alert", systemImage: "sos")
+            .font(.caption.weight(.semibold))
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.orange)
+
+        Button {
+          FallDetectionCoordinator.shared.handleDoubleTap()
+        } label: {
+          Text("Cancel countdown")
+            .font(.caption.weight(.semibold))
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+      }
+    }
+    .padding(14)
+    .frame(maxWidth: 400)
+    .background(.ultraThinMaterial)
+    .clipShape(RoundedRectangle(cornerRadius: 14))
+    .overlay(
+      RoundedRectangle(cornerRadius: 14)
+        .strokeBorder(Color.cyan.opacity(0.45), lineWidth: 1)
+    )
+  }
+  #endif
 
   // MARK: - Depth latency (same layout as DepthBenchmarkView statsCard)
 

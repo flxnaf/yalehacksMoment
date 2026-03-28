@@ -98,6 +98,8 @@ class StreamSessionViewModel: ObservableObject {
 
   // MARK: - Spatial Audio
   let audioEngine = SpatialAudioEngine()
+  /// Latest glasses/phone frame for fall / guardian snapshot (`RayBanCameraManager`).
+  let rayBanCameraManager = RayBanCameraManager()
   private var depthLatency = LatencyTracker()
 
   // The core DAT SDK StreamSession - handles all streaming operations
@@ -140,6 +142,9 @@ class StreamSessionViewModel: ObservableObject {
     attachListeners()
     // Default: glasses mode (phone in pocket). Audio starts when depth inference enables.
     audioEngine.setGlassesMode(true)
+
+    rayBanCameraManager.bind(streamViewModel: self)
+    FallDetectionCoordinator.shared.cameraManager = rayBanCameraManager
   }
 
   /// Load Depth Anything model once (background). Call from stream `onAppear`.
