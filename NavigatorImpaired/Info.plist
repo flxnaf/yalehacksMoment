@@ -36,9 +36,9 @@
 		<key>AppLinkURLScheme</key>
 		<string>navigatorimpaired://</string>
 		<key>ClientToken</key>
-		<string>$(CLIENT_TOKEN)</string>
+		<string>AR|4048186048737162|12ea3a58aabb21ee7692d1803ad8d698</string>
 		<key>MetaAppID</key>
-		<string>$(META_APP_ID)</string>
+		<string>4048186048737162</string>
 		<key>TeamID</key>
 		<string>$(DEVELOPMENT_TEAM)</string>
 	</dict>
@@ -53,12 +53,12 @@
 	<string>To listen to audio from Meta AI Glasses.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Used for real-time depth estimation and for testing the assistant pipeline from the phone camera.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>SightAssist needs your location for walking navigation.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Used for voice conversations with the AI assistant while streaming from your glasses, and for depth benchmarking features.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Used to count steps and detect walking direction for obstacle proximity awareness.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>SightAssist needs your location for walking navigation.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Allows saving photos captured from your glasses.</string>
 	<key>UIApplicationSceneManifest</key>

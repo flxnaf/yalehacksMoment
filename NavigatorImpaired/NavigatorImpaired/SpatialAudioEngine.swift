@@ -54,56 +54,105 @@ final class SquarePingVoice {
     }
 }
 
-// MARK: - Beacon sine pulse
+// MARK: - ChordBeaconVoice
 
-/// 800 Hz sine, 100 ms bursts at ~1 Hz (when `targetVolume` > 0).
-final class BeaconSinePulseVoice {
+/// Continuous pad-chord beacon — C5 + E5 + G5 with detuned chorus,
+/// sub-octave, and built-in Schroeder reverb. Plays when a clear path is
+/// sustained; positioned at the gap azimuth via HRTF.
+final class ChordBeaconVoice {
 
     var targetVolume: Float = 0
+
     private let sr: Float
-    private let burstSamples: Int
-    private let beaconFreq: Float = 800
-    private var burstLeft: Int = 0
-    private var silenceLeft: Int = 0
-    private var phase: Float = 0
     private var currentVolume: Float = 0
-    private let slew: Float = 0.002
+    private let slewRate: Float = 0.0015
+
+    private let baseFreqs: [Float] = [523.25, 659.25, 783.99]
+    private let detune: Float = 1.5
+    private var phases: [Float]
+
+    private var lfoPhase: Float = 0
+    private let lfoRate:  Float = 3.8
+    private let lfoDepth: Float = 0.0035
+
+    private var subPhase: Float = 0
+    private let subFreq:  Float = 261.63
+
+    private var lpState: Float = 0
+    private let lpAlpha: Float = 0.38
+
+    private var combBuffers: [[Float]]
+    private var combIndices: [Int]
+    private let combLengths: [Int]
+    private let combFeedback: Float = 0.72
 
     init(sampleRate: Float) {
         self.sr = sampleRate
-        self.burstSamples = max(1, Int(0.10 * sampleRate))
-        self.silenceLeft = Int(sampleRate)
+        self.phases = [Float](repeating: 0, count: 6)
+        let lengths = [1117, 1367, 1559, 1801]
+        self.combLengths = lengths
+        self.combBuffers = lengths.map { [Float](repeating: 0, count: $0) }
+        self.combIndices = [Int](repeating: 0, count: lengths.count)
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
+        let tv = targetVolume
+
         for i in 0..<frameCount {
-            currentVolume += (targetVolume - currentVolume) * slew
-            if currentVolume < 0.001 {
-                buffer[i] = 0
-                continue
+            currentVolume += (tv - currentVolume) * slewRate
+
+            let lfo = 1.0 + lfoDepth * sinf(2 * .pi * lfoPhase)
+            lfoPhase += lfoRate / sr
+            if lfoPhase >= 1.0 { lfoPhase -= 1.0 }
+
+            var dry: Float = 0
+            for n in 0..<3 {
+                let fA = (baseFreqs[n] - detune) * lfo
+                let fB = (baseFreqs[n] + detune) * lfo
+                let idxA = n * 2
+                let idxB = n * 2 + 1
+
+                let oscA = sinf(2 * .pi * phases[idxA])
+                       + 0.3 * sinf(4 * .pi * phases[idxA])
+                let oscB = sinf(2 * .pi * phases[idxB])
+                       + 0.3 * sinf(4 * .pi * phases[idxB])
+
+                dry += (oscA + oscB) * 0.5
+
+                phases[idxA] += fA / sr
+                phases[idxB] += fB / sr
+                if phases[idxA] >= 1.0 { phases[idxA] -= 1.0 }
+                if phases[idxB] >= 1.0 { phases[idxB] -= 1.0 }
             }
-            if burstLeft > 0 {
-                let s = sinf(2 * .pi * phase) * currentVolume
-                phase += beaconFreq / sr
-                if phase >= 1 { phase -= 1 }
-                buffer[i] = s
-                burstLeft -= 1
-            } else {
-                buffer[i] = 0
-                silenceLeft -= 1
-                if silenceLeft <= 0 {
-                    burstLeft = burstSamples
-                    let periodSamples = Int(sr)
-                    silenceLeft = max(0, periodSamples - burstSamples)
-                }
+
+            let sub = sinf(2 * .pi * subPhase) * 0.25
+            subPhase += subFreq * lfo / sr
+            if subPhase >= 1.0 { subPhase -= 1.0 }
+
+            dry = (dry / 3.0 + sub) * currentVolume
+
+            lpState = lpAlpha * dry + (1 - lpAlpha) * lpState
+
+            var wet: Float = 0
+            for c in 0..<combLengths.count {
+                let idx = combIndices[c]
+                let delayed = combBuffers[c][idx]
+                let mixed = lpState + delayed * combFeedback
+                combBuffers[c][idx] = mixed
+                combIndices[c] = (idx + 1) % combLengths[c]
+                wet += delayed
             }
+            wet *= 0.20
+
+            buffer[i] = lpState * 0.70 + wet
         }
     }
 }
 
 // MARK: - SpatialAudioEngine
 
-/// Spatial audio: up to six discrete obstacle pings + one beacon pulse (HRTF via `AVAudioEnvironmentNode`).
+/// Spatial audio: obstacle pings (driven by policy) + chord beacon (driven
+/// by internal PathFinder sustain/EMA logic from the working earlier version).
 @MainActor
 final class SpatialAudioEngine: ObservableObject {
 
@@ -134,10 +183,9 @@ final class SpatialAudioEngine: ObservableObject {
     private var obstacleVoices: [SquarePingVoice] = []
     private var obstacleNodes: [AVAudioSourceNode] = []
 
-    private let beaconVoice: BeaconSinePulseVoice
+    private let beaconVoice: ChordBeaconVoice
     private var beaconNode: AVAudioSourceNode?
 
-    /// Front-center HRTF source for `AudioOrchestrator` spatial TTS (`write` pipeline).
     let sightAssistSpeechPlayer = AVAudioPlayerNode()
 
     let haptics = NavigationHapticEngine()
@@ -151,29 +199,40 @@ final class SpatialAudioEngine: ObservableObject {
 
     private let sampleRate: Double = 44100
 
+    // MARK: - Beacon sustain/EMA state (from old working version)
+
+    private let beaconRequiredFrames = 6
+    private let peakBeaconVol: Float = 0.40
+    private var beaconSustainCount = 0
+    private var beaconConfEMA: Float = 0
+    private var beaconAzimuthEMA: Float = 0.5
+
+    // MARK: - Observers
+
     private var interruptionObserver: NSObjectProtocol?
     private var routeObserver: NSObjectProtocol?
     private var foregroundObserver: NSObjectProtocol?
+    private var backgroundObserver: NSObjectProtocol?
 
     private var updateCount = 0
 
     // MARK: - Init
 
     init() {
-        beaconVoice = BeaconSinePulseVoice(sampleRate: Float(sampleRate))
+        beaconVoice = ChordBeaconVoice(sampleRate: Float(sampleRate))
         buildAudioGraph()
         registerSessionObservers()
     }
 
     deinit {
-        [interruptionObserver, routeObserver, foregroundObserver]
+        [interruptionObserver, routeObserver, foregroundObserver, backgroundObserver]
             .compactMap { $0 }
             .forEach { NotificationCenter.default.removeObserver($0) }
     }
 
     // MARK: - Public API
 
-    /// Single entry: depth for UI + vision; policy output drives all spatial audio.
+    /// Called each depth frame. Obstacle pings from policy; beacon from internal PathFinder logic.
     func applyPerceptionFrame(
         depthMap: [Float],
         width: Int,
@@ -182,12 +241,16 @@ final class SpatialAudioEngine: ObservableObject {
     ) {
         guard isEnabled, avEngine.isRunning else { return }
 
-        let scanResult = pathFinder.scan(depthMap: depthMap, width: width, height: height)
+        // 1. Path scan + beacon (old working logic)
+        let wallHint = visionDetector.wallDetected
+        let scanResult = pathFinder.scan(depthMap: depthMap, width: width, height: height,
+                                         wallHint: wallHint)
         depthProfile = scanResult.profile
         rawPaths = scanResult.paths
+        applyBeacon(scanResult.paths, duck: policyOutput.duckNonSpeech)
 
+        // 2. Obstacle pings (from policy engine)
         let duck = policyOutput.duckNonSpeech
-
         for i in 0..<obstacleColumnCount {
             let on = policyOutput.obstacleColumnsActive[i]
             obstacleVoices[i].enabled = on
@@ -199,24 +262,7 @@ final class SpatialAudioEngine: ObservableObject {
             }
         }
 
-        if policyOutput.beaconEnabled {
-            beaconVoice.targetVolume = policyOutput.beaconVolume * duck
-            let deg = Float(policyOutput.beaconAzimuthDegrees)
-            let rad = deg * Float.pi / 180
-            let dist: Float = 2.0
-            beaconNode?.position = AVAudio3DPoint(
-                x: -sin(rad) * dist,
-                y: 0,
-                z: -cos(rad) * dist
-            )
-        } else {
-            beaconVoice.targetVolume = 0
-        }
-
-        activePath = scanResult.paths.first
-
-        beaconSustainProgress = policyOutput.beaconEnabled ? 1 : 0
-
+        // 3. Haptics
         if hapticsEnabled {
             haptics.updatePolicy(
                 intensity: policyOutput.hapticIntensity,
@@ -224,13 +270,11 @@ final class SpatialAudioEngine: ObservableObject {
             )
         }
 
+        // 4. Vision state for UI
         detectedPersons = visionDetector.latestPersons
         detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
 
         updateCount += 1
-        if updateCount % 45 == 1 {
-            // debug
-        }
     }
 
     func setGlassesMode(_ glasses: Bool) {
@@ -244,13 +288,53 @@ final class SpatialAudioEngine: ObservableObject {
         }
     }
 
+    // MARK: - Beacon sustain/EMA logic (from old working version)
+
+    private func applyBeacon(_ paths: [ClearPath], duck: Float) {
+        guard let best = paths.first, best.confidence > 0.08 else {
+            beaconSustainCount = max(0, beaconSustainCount - 3)
+            beaconConfEMA *= 0.82
+            beaconSustainProgress = Float(beaconSustainCount) / Float(beaconRequiredFrames)
+            beaconVoice.targetVolume = 0
+            activePath = nil
+            return
+        }
+
+        // If path jumps far from the EMA, snap azimuth to it
+        if abs(best.azimuthFraction - beaconAzimuthEMA) > 0.35 {
+            beaconAzimuthEMA = best.azimuthFraction
+        }
+
+        let alpha: Float = best.confidence > beaconConfEMA ? 0.35 : 0.18
+        beaconConfEMA    += alpha * (best.confidence      - beaconConfEMA)
+        beaconAzimuthEMA += 0.30  * (best.azimuthFraction - beaconAzimuthEMA)
+
+        beaconSustainCount = min(beaconSustainCount + 1, beaconRequiredFrames + 1)
+        beaconSustainProgress = min(1, Float(beaconSustainCount) / Float(beaconRequiredFrames))
+
+        let smoothed = ClearPath(azimuthFraction: beaconAzimuthEMA,
+                                  width: best.width,
+                                  avgDepth: best.avgDepth,
+                                  confidence: beaconConfEMA)
+
+        guard beaconSustainCount >= beaconRequiredFrames else {
+            beaconVoice.targetVolume = 0
+            activePath = smoothed
+            return
+        }
+
+        let audioX = (beaconAzimuthEMA - 0.5) * 3.6
+        beaconNode?.position = AVAudio3DPoint(x: audioX, y: 0, z: -1.5)
+        beaconVoice.targetVolume = min(peakBeaconVol, beaconConfEMA * 0.60) * duck
+        activePath = smoothed
+    }
+
     // MARK: - Audio graph
 
     private func buildAudioGraph() {
         let mono = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
         reverb.loadFactoryPreset(.smallRoom)
-        // Light wet — obstacle pings are discrete; heavy reverb smears spatial cues.
         reverb.wetDryMix = 6
 
         avEngine.attach(environment)
@@ -321,7 +405,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
         if trackPhoneOrientation { startMotionTracking() }
         haptics.start()
-        print("[SpatialAudio] Started — column pings + beacon pulse")
+        print("[SpatialAudio] Started — chord beacon + column pings")
     }
 
     private func configureSession() {
@@ -338,6 +422,8 @@ final class SpatialAudioEngine: ObservableObject {
     private func stopEngine() {
         obstacleVoices.forEach { $0.enabled = false; $0.volume = 0 }
         beaconVoice.targetVolume = 0
+        beaconSustainCount = 0
+        beaconConfEMA = 0
         activePath = nil
         rawPaths = []
         depthProfile = []
@@ -395,13 +481,29 @@ final class SpatialAudioEngine: ObservableObject {
             self.configureSession()
             try? self.avEngine.start()
         }
+
+        backgroundObserver = nc.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.obstacleVoices.forEach { $0.enabled = false; $0.volume = 0 }
+            self.beaconVoice.targetVolume = 0
+            self.haptics.stop()
+            self.avEngine.stop()
+            self.motion.stopDeviceMotionUpdates()
+        }
     }
+
+    /// Current device heading in radians (from CMAttitude.yaw). Read by room detector.
+    private(set) var currentHeading: Float = 0
 
     private func startMotionTracking() {
         guard motion.isDeviceMotionAvailable else { return }
         motion.deviceMotionUpdateInterval = 1.0 / 30
         motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
             guard let self, let att = data?.attitude else { return }
+            self.currentHeading = Float(att.yaw)
             self.environment.listenerAngularOrientation = AVAudio3DAngularOrientation(
                 yaw: Float(att.yaw * 180 / .pi),
                 pitch: Float(att.pitch * 180 / .pi),

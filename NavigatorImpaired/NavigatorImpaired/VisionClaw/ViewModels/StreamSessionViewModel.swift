@@ -86,6 +86,7 @@ class StreamSessionViewModel: ObservableObject {
   @Published var depthMinMs: Double = .infinity
   @Published var depthMaxMs: Double = 0
   @Published var depthTotalFrames: Int = 0
+  @Published var isInRoom: Bool = false
 
   private let depthEngine = DepthInferenceEngine()
   private var depthInferBusy = false
@@ -248,7 +249,16 @@ class StreamSessionViewModel: ObservableObject {
             height: result.mapHeight,
             policyOutput: policyOut
           )
-          self.verbalCueController.process(obstacle: obstacle, geminiSpeaking: geminiSpeaking)
+          self.verbalCueController.process(
+            activePath: self.audioEngine.activePath,
+            allPaths: self.audioEngine.rawPaths,
+            doorDetected: self.audioEngine.visionDetector.doorDetected,
+            corridorDetected: self.audioEngine.visionDetector.corridorDetected,
+            geminiSpeaking: geminiSpeaking,
+            depthProfile: self.audioEngine.depthProfile,
+            heading: self.audioEngine.currentHeading
+          )
+          self.isInRoom = self.verbalCueController.roomDetector.currentState.inRoom
           self.depthLatency.record(ms)
           self.depthLatestMs = ms
           self.depthAvgMs = self.depthLatency.average
@@ -511,6 +521,7 @@ class StreamSessionViewModel: ObservableObject {
     hasReceivedFirstFrame = false
     streamingStatus = .stopped
     streamingMode = .glasses
+    audioEngine.isEnabled = false
     audioEngine.setGlassesMode(true)
     NSLog("[Stream] iPhone camera mode stopped")
   }
@@ -535,6 +546,7 @@ class StreamSessionViewModel: ObservableObject {
       currentVideoFrame = nil
       depthFrame = nil
       streamingStatus = .stopped
+      audioEngine.isEnabled = false
     case .waitingForDevice, .starting, .stopping, .paused:
       streamingStatus = .waiting
     case .streaming:

@@ -47,23 +47,19 @@ final class PathFinder {
 
     // MARK: - Tuning
 
-    /// Number of horizontal sample columns — finer than single-column gives better gap resolution.
     static let columnCount = 24
-    /// Horizontal pixels sampled per column (band width, centred on the column).
     private static let xBandPixels = 5
-    /// Rows to sample — wider band captures more floor for better filtering.
     private static let yBandLow:  Float = 0.20
     private static let yBandHigh: Float = 0.75
-    /// Vertical sample step (every Nth pixel row in the band).
     private static let ySampleStep = 6
-    /// Depth below this is "clear" — no close obstacle.
-    /// 0.38 balances: far walls through doorways pass, but a door/wall
-    /// within arm's reach (depth ~0.40+) is correctly blocked.
     static let clearThreshold: Float = 0.38
-    /// A gap narrower than this fraction of frame width is ignored.
     private static let minGapFraction: Float = 0.10
-    /// Temporal EMA alpha: higher = more responsive, lower = more stable.
     private static let temporalAlpha: Float = 0.40
+    /// Columns with vertical depth stddev below this are likely flat walls,
+    /// not open space. Walls have uniform depth; corridors/doorways do not.
+    /// Kept conservative (0.02) because floor filtering removes the highest-
+    /// variance samples, so even real open space can have moderate variance.
+    private static let wallStddevThreshold: Float = 0.02
 
     // MARK: - State
 
@@ -71,19 +67,21 @@ final class PathFinder {
 
     // MARK: - Public API
 
-    /// Returns the depth profile and detected clear paths together.
-    func scan(depthMap: [Float], width: Int, height: Int) -> PathScanResult {
+    func scan(depthMap: [Float], width: Int, height: Int, wallHint: Bool = false) -> PathScanResult {
         guard !depthMap.isEmpty, width > 1, height > 1 else {
             return PathScanResult(profile: [], paths: [])
         }
-        var profile = Self.buildProfile(depthMap: depthMap, width: width, height: height)
+        let effectiveWallThreshold = wallHint
+            ? Self.wallStddevThreshold * 1.5
+            : Self.wallStddevThreshold
+        var profile = Self.buildProfile(depthMap: depthMap, width: width, height: height,
+                                        wallStddev: effectiveWallThreshold)
         profile = Self.smoothProfile(profile)
         profile = applyTemporalEMA(profile)
         let paths = Self.extractGaps(from: profile)
         return PathScanResult(profile: profile, paths: paths)
     }
 
-    /// Legacy static convenience (no temporal smoothing).
     static func scan(depthMap: [Float], width: Int, height: Int) -> PathScanResult {
         guard !depthMap.isEmpty, width > 1, height > 1 else {
             return PathScanResult(profile: [], paths: [])
@@ -104,9 +102,8 @@ final class PathFinder {
 
     // MARK: - Profile construction
 
-    /// Build the raw 1-D profile by sampling a band of pixels per column,
-    /// filtering out likely floor pixels, then taking the 75th percentile.
-    private static func buildProfile(depthMap: [Float], width: Int, height: Int) -> [Float] {
+    private static func buildProfile(depthMap: [Float], width: Int, height: Int,
+                                     wallStddev: Float = wallStddevThreshold) -> [Float] {
         let yStart = Int(yBandLow  * Float(height))
         let yEnd   = Int(yBandHigh * Float(height))
         let halfBand = xBandPixels / 2
@@ -143,6 +140,22 @@ final class PathFinder {
             } else {
                 samples.sort()
                 let median = samples[samples.count / 2]
+
+                // Wall detection: only for columns well below threshold
+                // (suspicious "looks very far" readings) with truly uniform
+                // depth. After floor filtering, real corridors still show some
+                // variance from objects at different distances.
+                if median < (clearThreshold - 0.10) && samples.count >= 8 {
+                    let mean = samples.reduce(0, +) / Float(samples.count)
+                    var sumSq: Float = 0
+                    for s in samples { sumSq += (s - mean) * (s - mean) }
+                    let stddev = sqrtf(sumSq / Float(samples.count))
+                    if stddev < wallStddev {
+                        profile[col] = clearThreshold + 0.05
+                        continue
+                    }
+                }
+
                 profile[col] = median
             }
         }
@@ -151,13 +164,6 @@ final class PathFinder {
 
     // MARK: - Floor filtering
 
-    /// Heuristic: floor pixels show a smooth vertical depth gradient (depth
-    /// increases as we look down) while obstacles have roughly constant depth
-    /// vertically. For monocular depth (0 = far, 1 = near), floor below the
-    /// camera gets nearer toward the bottom of the frame.
-    ///
-    /// Aggressive filtering: we'd rather accidentally drop a few obstacle
-    /// pixels than mistake walkable floor for a wall.
     private static func isLikelyFloor(
         depthMap: [Float], x: Int, y: Int, width: Int, height: Int
     ) -> Bool {
@@ -168,17 +174,9 @@ final class PathFinder {
         let diff = below - curr
         let yFrac = Float(y) / Float(height)
 
-        // Any downward gradient (nearer below) in lower 60% of frame → floor
         if diff > 0.04 && yFrac > 0.40 { return true }
-
-        // Moderate gradient anywhere → floor
         if diff > 0.07 { return true }
-
-        // Flat + low-depth region in bottom third → ground plane
-        // (walls are also flat but read higher depth, so require low depth)
         if abs(diff) < 0.035 && yFrac > 0.62 && curr < 0.40 { return true }
-
-        // Very high depth in bottom quarter with downward gradient → floor
         if curr > 0.60 && yFrac > 0.70 && diff > 0.01 { return true }
 
         return false
@@ -186,8 +184,6 @@ final class PathFinder {
 
     // MARK: - Spatial smoothing
 
-    /// [0.25, 0.5, 0.25] convolution kernel — removes single-column noise
-    /// without smearing real obstacle edges too much.
     private static func smoothProfile(_ raw: [Float]) -> [Float] {
         let n = raw.count
         guard n >= 3 else { return raw }
@@ -202,7 +198,6 @@ final class PathFinder {
 
     // MARK: - Temporal EMA
 
-    /// Blends the current profile with the previous frame's to reduce flicker.
     private func applyTemporalEMA(_ profile: [Float]) -> [Float] {
         guard let prev = prevProfile, prev.count == profile.count else {
             prevProfile = profile

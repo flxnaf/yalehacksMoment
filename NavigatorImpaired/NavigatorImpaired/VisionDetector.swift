@@ -31,6 +31,29 @@ final class VisionDetector: @unchecked Sendable {
 
     private(set) var latestPersons: [PersonDetection] = []
     private(set) var latestSceneLabel: SceneLabel?
+    /// All relevant scene labels above confidence threshold (not just the top one).
+    private(set) var latestSceneLabels: [SceneLabel] = []
+
+    /// True when the scene classifier's top label contains "wall".
+    var wallDetected: Bool {
+        latestSceneLabels.contains { $0.identifier.lowercased().contains("wall") }
+    }
+
+    /// True when any label contains "door" or "doorway".
+    var doorDetected: Bool {
+        latestSceneLabels.contains {
+            let id = $0.identifier.lowercased()
+            return id.contains("door")
+        }
+    }
+
+    /// True when any label contains "corridor" or "hallway".
+    var corridorDetected: Bool {
+        latestSceneLabels.contains {
+            let id = $0.identifier.lowercased()
+            return id.contains("corridor") || id.contains("hallway")
+        }
+    }
 
     // MARK: - Throttle state
 
@@ -134,16 +157,18 @@ final class VisionDetector: @unchecked Sendable {
                 return
             }
 
-            let top = (request.results ?? [])
+            let allRelevant = (request.results ?? [])
                 .filter { $0.confidence > 0.25 }
-                .first { obs in
+                .filter { obs in
                     self.relevantKeywords.contains { obs.identifier.lowercased().contains($0) }
                 }
+                .map { SceneLabel(identifier: $0.identifier, confidence: $0.confidence) }
 
-            let label = top.map { SceneLabel(identifier: $0.identifier, confidence: $0.confidence) }
+            let top = allRelevant.first
 
             DispatchQueue.main.async {
-                self.latestSceneLabel = label
+                self.latestSceneLabel = top
+                self.latestSceneLabels = allRelevant
                 self.classifyBusy = false
             }
         }

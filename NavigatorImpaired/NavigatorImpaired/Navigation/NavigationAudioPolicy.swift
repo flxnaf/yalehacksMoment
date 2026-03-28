@@ -84,7 +84,7 @@ final class NavigationAudioPolicyEngine: @unchecked Sendable {
         var count = 0
         for idx in ranked {
             let dist = input.columnDepthsMeters[idx]
-            guard dist < 2.0 else { continue }
+            guard dist < 1.5 else { continue }
             if count >= maxCols { break }
             active[idx] = true
             let (r, f, v) = pingParams(distanceMeters: dist)
@@ -211,12 +211,12 @@ final class NavigationAudioPolicyEngine: @unchecked Sendable {
 
     private func pingParams(distanceMeters d: Float) -> (Float, Float, Float) {
         switch d {
-        case ..<0.5:
-            return (4.0, 900, 0.55)
-        case ..<1.0:
-            return (2.0, 650, 0.45)
-        case ..<2.0:
-            return (0.75, 400, 0.35)
+        case ..<0.4:
+            return (4.0, 900, 0.50)
+        case ..<0.8:
+            return (2.0, 650, 0.40)
+        case ..<1.5:
+            return (0.75, 400, 0.25)
         default:
             return (0, 400, 0)
         }

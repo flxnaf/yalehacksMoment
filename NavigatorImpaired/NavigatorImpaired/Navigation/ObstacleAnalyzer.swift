@@ -57,7 +57,7 @@ final class ObstacleAnalyzer {
         } else {
             direction = "left"
         }
-        if centerDist < 1.5 {
+        if centerDist < 0.8 && leftDist < 1.5 && rightDist < 1.5 {
             direction = "stop"
         }
 

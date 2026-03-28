@@ -65,6 +65,24 @@ struct StreamView: View {
               )
               .allowsHitTesting(false)
             }
+            if viewModel.isInRoom {
+              VStack {
+                HStack {
+                  Spacer()
+                  Text("In Room")
+                    .font(.caption.bold())
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(.orange.opacity(0.85))
+                    .foregroundColor(.white)
+                    .clipShape(Capsule())
+                    .padding(.top, 52)
+                    .padding(.trailing, 12)
+                }
+                Spacer()
+              }
+              .allowsHitTesting(false)
+            }
           }
         }
         .edgesIgnoringSafeArea(.all)
