@@ -18,6 +18,17 @@ struct ClearPath {
     var audioX: Float { (azimuthFraction - 0.5) * 5.0 }
 }
 
+// MARK: - PathScanResult
+
+/// Bundles the raw depth profile with the detected clear paths so both can
+/// be consumed without recomputing the profile.
+struct PathScanResult {
+    /// Per-column average depth (0 = far, 1 = near). Length = `PathFinder.columnCount`.
+    let profile: [Float]
+    /// Detected clear gaps sorted best-first by confidence.
+    let paths: [ClearPath]
+}
+
 // MARK: - PathFinder
 
 /// Scans the depth map horizontally and finds contiguous "clear" regions —
@@ -33,7 +44,8 @@ enum PathFinder {
     // MARK: - Tuning
 
     /// Number of horizontal sample columns — more = finer angular resolution.
-    private static let profileCols = 20
+    static let columnCount = 20
+    private static let profileCols = columnCount
     /// Rows to sample, as fractions of frame height (eye-level band only).
     private static let yBandLow:  Float = 0.28
     private static let yBandHigh: Float = 0.68
@@ -49,12 +61,19 @@ enum PathFinder {
 
     // MARK: - Public
 
-    /// Returns detected clear paths sorted best-first.
-    static func findClearPaths(depthMap: [Float], width: Int, height: Int) -> [ClearPath] {
-        guard !depthMap.isEmpty, width > 1, height > 1 else { return [] }
-
+    /// Returns the depth profile and detected clear paths together.
+    static func scan(depthMap: [Float], width: Int, height: Int) -> PathScanResult {
+        guard !depthMap.isEmpty, width > 1, height > 1 else {
+            return PathScanResult(profile: [], paths: [])
+        }
         let profile = buildProfile(depthMap: depthMap, width: width, height: height)
-        return extractGaps(from: profile)
+        let paths = extractGaps(from: profile)
+        return PathScanResult(profile: profile, paths: paths)
+    }
+
+    /// Returns detected clear paths sorted best-first (legacy convenience).
+    static func findClearPaths(depthMap: [Float], width: Int, height: Int) -> [ClearPath] {
+        scan(depthMap: depthMap, width: width, height: height).paths
     }
 
     // MARK: - Private

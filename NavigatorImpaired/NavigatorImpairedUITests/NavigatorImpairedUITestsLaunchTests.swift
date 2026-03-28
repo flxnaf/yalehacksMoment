@@ -1,13 +1,13 @@
 //
-//  DepthanythingTestUITestsLaunchTests.swift
-//  DepthanythingTestUITests
+//  NavigatorImpairedUITestsLaunchTests.swift
+//  NavigatorImpairedUITests
 //
 //  Created by Felix Fan on 26/03/2026.
 //
 
 import XCTest
 
-final class DepthanythingTestUITestsLaunchTests: XCTestCase {
+final class NavigatorImpairedUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

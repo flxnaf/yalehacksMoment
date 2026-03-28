@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "BED202B02F758B0500B0C0A4"
-               BuildableName = "DepthanythingTest.app"
-               BlueprintName = "DepthanythingTest"
-               ReferencedContainer = "container:DepthanythingTest.xcodeproj">
+               BuildableName = "NavigatorImpaired.app"
+               BlueprintName = "NavigatorImpaired"
+               ReferencedContainer = "container:NavigatorImpaired.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -36,9 +36,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "BED202BD2F758B0600B0C0A4"
-               BuildableName = "DepthanythingTestTests.xctest"
-               BlueprintName = "DepthanythingTestTests"
-               ReferencedContainer = "container:DepthanythingTest.xcodeproj">
+               BuildableName = "NavigatorImpairedTests.xctest"
+               BlueprintName = "NavigatorImpairedTests"
+               ReferencedContainer = "container:NavigatorImpaired.xcodeproj">
             </BuildableReference>
          </TestableReference>
          <TestableReference
@@ -47,9 +47,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "BED202C72F758B0600B0C0A4"
-               BuildableName = "DepthanythingTestUITests.xctest"
-               BlueprintName = "DepthanythingTestUITests"
-               ReferencedContainer = "container:DepthanythingTest.xcodeproj">
+               BuildableName = "NavigatorImpairedUITests.xctest"
+               BlueprintName = "NavigatorImpairedUITests"
+               ReferencedContainer = "container:NavigatorImpaired.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -69,9 +69,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "BED202B02F758B0500B0C0A4"
-            BuildableName = "DepthanythingTest.app"
-            BlueprintName = "DepthanythingTest"
-            ReferencedContainer = "container:DepthanythingTest.xcodeproj">
+            BuildableName = "NavigatorImpaired.app"
+            BlueprintName = "NavigatorImpaired"
+            ReferencedContainer = "container:NavigatorImpaired.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -86,9 +86,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "BED202B02F758B0500B0C0A4"
-            BuildableName = "DepthanythingTest.app"
-            BlueprintName = "DepthanythingTest"
-            ReferencedContainer = "container:DepthanythingTest.xcodeproj">
+            BuildableName = "NavigatorImpaired.app"
+            BlueprintName = "NavigatorImpaired"
+            ReferencedContainer = "container:NavigatorImpaired.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

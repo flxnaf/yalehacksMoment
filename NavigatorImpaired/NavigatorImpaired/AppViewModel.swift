@@ -28,7 +28,7 @@ class AppViewModel: ObservableObject {
     /// Kept for DepthBenchmarkView when switching to Ray-Ban; SDK is already configured at app launch.
     func configureIfNeeded() {}
 
-    /// Meta OAuth returns to your app via depthanythingtest://
+    /// Meta OAuth returns to your app via the registered URL scheme.
     func handleIncomingURL(_ url: URL) {
         Task { @MainActor in
             let w = wearables

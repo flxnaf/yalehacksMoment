@@ -74,65 +74,70 @@ final class FMObstacleVoice {
 
 // MARK: - FMBeaconVoice
 
-/// Clean warm pad for the clear-path beacon.
+/// Karplus-Strong plucked-string beacon producing a repeating harp/kalimba arpeggio.
 ///
-/// Three chord tones (C5 · E5 · G5) rendered with very gentle FM (mod index 0.2,
-/// 2:1 ratio for a soft octave harmonic) plus chorus detuning. The result is a
-/// smooth, inviting drone — like a soft synth pad, clearly distinct from the
-/// obstacle tones. No inharmonic beating, no metallic character.
-final class FMBeaconVoice {
+/// Instead of a continuous synth chord, this plays C5 → E5 → G5 as naturally
+/// decaying plucked notes, cycling every ~2 seconds. Karplus-Strong works by
+/// exciting a delay line with filtered noise and repeatedly averaging adjacent
+/// samples — the result is a physically realistic vibrating-string timbre with
+/// no synthetic character.
+///
+/// The arpeggio pattern makes the beacon musical and immediately recognisable
+/// as "the safe direction sound," clearly distinct from the obstacle FM tones.
+final class ArpeggioBeaconVoice {
 
     var targetVolume: Float = 0
 
     private let sr: Float
     private var currentVolume: Float = 0
-    private let slewRate: Float = 0.0003
+    private let slewRate: Float = 0.0005
 
-    private struct Partial {
-        var carrierPhase: Float = 0
-        var modPhase:     Float = 0
-        var vibPhase:     Float
-        let carrierFreq:  Float
-        let modFreq:      Float
-        let modIndex:     Float
-        let gain:         Float
-        let vibRate:      Float
-        let vibDepth:     Float
+    // Arpeggio state
+    private let noteFreqs: [Float] = [523.25, 659.25, 783.99]  // C5, E5, G5
+    private var currentNote = 0
+    private var samplesSinceLastPluck = 0
+    private let samplesPerNote: Int    // ~0.6 s per note
+
+    // Karplus-Strong delay lines (one per note for overlap / ring-out)
+    private var lines: [KSLine]
+
+    private struct KSLine {
+        var buffer: [Float]
+        var writePos: Int = 0
+        let length: Int
+        var energy: Float = 0
+        let decay: Float          // per-sample decay (controls ring time)
     }
-
-    private var partials: [Partial]
-    private let normFactor: Float
 
     init(sampleRate: Float) {
         self.sr = sampleRate
+        self.samplesPerNote = Int(sampleRate * 0.65)
 
-        let notes: [(freq: Float, gain: Float)] = [
-            (523.25, 1.00),   // C5 — root
-            (659.25, 0.65),   // E5 — major third
-            (783.99, 0.42),   // G5 — fifth
-        ]
-
-        var parts: [Partial] = []
-        var totalGain: Float = 0
-
-        for note in notes {
-            for detune in [-0.0012, 0.0012] as [Float] {
-                let f = note.freq * (1.0 + detune)
-                let g = note.gain * 0.5
-                totalGain += g
-                parts.append(Partial(
-                    vibPhase: Float.random(in: 0..<1),
-                    carrierFreq: f,
-                    modFreq: f * 2.0,    // 2:1 ratio — clean octave harmonic, no dissonance
-                    modIndex: 0.2,       // very gentle — adds warmth without weirdness
-                    gain: g,
-                    vibRate: Float.random(in: 3.8...4.6),
-                    vibDepth: 0.0012     // ±0.12% ≈ ±2 cents — subtle shimmer
-                ))
-            }
+        var ls: [KSLine] = []
+        for freq in [523.25, 659.25, 783.99] as [Float] {
+            let len = max(2, Int(sampleRate / freq))
+            ls.append(KSLine(
+                buffer: [Float](repeating: 0, count: len),
+                length: len,
+                decay: 0.998      // warm decay — rings for ~1.5 s
+            ))
         }
-        self.partials = parts
-        self.normFactor = totalGain > 0 ? 1.0 / totalGain : 1.0
+        self.lines = ls
+    }
+
+    /// Trigger a pluck on the given note index by filling its delay line with
+    /// band-limited noise shaped by a gentle low-pass.
+    private func pluck(note idx: Int) {
+        let len = lines[idx].length
+        var prev: Float = 0
+        for i in 0..<len {
+            let noise = Float.random(in: -1...1)
+            let filtered = 0.5 * noise + 0.5 * prev
+            lines[idx].buffer[i] = filtered
+            prev = filtered
+        }
+        lines[idx].writePos = 0
+        lines[idx].energy = 1.0
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
@@ -141,46 +146,60 @@ final class FMBeaconVoice {
         for i in 0..<frameCount {
             currentVolume += (tv - currentVolume) * slewRate
 
-            var sample: Float = 0
-            for p in 0..<partials.count {
-                let vib = 1.0 + partials[p].vibDepth * sinf(2 * .pi * partials[p].vibPhase)
-                partials[p].vibPhase += partials[p].vibRate / sr
-                if partials[p].vibPhase >= 1.0 { partials[p].vibPhase -= 1.0 }
-
-                let cFreq = partials[p].carrierFreq * vib
-                let mFreq = partials[p].modFreq * vib
-
-                let mod = partials[p].modIndex * sinf(2 * .pi * partials[p].modPhase)
-                partials[p].modPhase += mFreq / sr
-                if partials[p].modPhase >= 1.0 { partials[p].modPhase -= 1.0 }
-
-                sample += partials[p].gain * sinf(2 * .pi * partials[p].carrierPhase + mod)
-                partials[p].carrierPhase += cFreq / sr
-                if partials[p].carrierPhase >= 1.0 { partials[p].carrierPhase -= 1.0 }
+            // Trigger next note in arpeggio when it's time
+            if currentVolume > 0.01 {
+                samplesSinceLastPluck += 1
+                if samplesSinceLastPluck >= samplesPerNote {
+                    pluck(note: currentNote)
+                    currentNote = (currentNote + 1) % noteFreqs.count
+                    samplesSinceLastPluck = 0
+                }
+            } else {
+                samplesSinceLastPluck = samplesPerNote - 1
             }
 
-            buffer[i] = sample * normFactor * currentVolume
+            // Sum all active lines (notes ring out and overlap naturally)
+            var sample: Float = 0
+            for li in 0..<lines.count {
+                guard lines[li].energy > 0.001 else { continue }
+
+                let len = lines[li].length
+                let pos = lines[li].writePos
+                let cur = lines[li].buffer[pos]
+                let next = lines[li].buffer[(pos + 1) % len]
+
+                // Karplus-Strong averaging filter — this is what creates the string sound
+                let avg = lines[li].decay * 0.5 * (cur + next)
+                lines[li].buffer[pos] = avg
+                lines[li].writePos = (pos + 1) % len
+                lines[li].energy *= lines[li].decay
+
+                sample += cur
+            }
+
+            buffer[i] = sample * 0.45 * currentVolume
         }
     }
 }
 
 // MARK: - SpatialAudioEngine
 
-/// Navigation audio engine with two perceptually distinct layers:
+/// 360° navigation audio engine with three perceptual layers:
 ///
-/// **Obstacle layer** (3 zones: left / centre / right)
-///   FM bell/mallet tones (185–262 Hz). Proximity drives modulation index
-///   (warmer → brighter), volume, and pulse rate. HRTF-positioned so stereo
-///   panning tells the user *where*; intensity tells them *how close*.
+/// **Obstacle layer** (pool of 8 repositionable voices)
+///   FM bell/mallet tones (175–290 Hz). Each frame, the depth profile is merged
+///   into a persistent `WorldObstacleMap` covering the full 360° around the user.
+///   The top-N obstacles are assigned to the voice pool and positioned via HRTF
+///   at their exact world-space bearing. Obstacles behind the user (scanned
+///   earlier) persist and fade gradually, giving continuous spatial awareness.
 ///
 /// **Path beacon** (single moving source)
-///   FM singing-bowl pad (C5 · E5 · G5 chord). Warm, ethereal timbre clearly
-///   distinct from the obstacle bells. Positioned at the widest clear gap.
-///   Tells the user: "walk TOWARD this sound."
+///   Karplus-Strong harp arpeggio (C5 → E5 → G5). Positioned at the widest
+///   clear gap. Tells the user: "walk TOWARD this sound."
 ///
 /// **Haptics** (via NavigationHapticEngine)
 ///   Continuous vibration with intensity/sharpness mapped to proximity.
-///   Multi-object differentiation via time-multiplexed haptic slots.
+///   Uses zone-based sampling for left/center/right haptic differentiation.
 @MainActor
 final class SpatialAudioEngine: ObservableObject {
 
@@ -196,26 +215,38 @@ final class SpatialAudioEngine: ObservableObject {
     @Published var activePath: ClearPath? = nil
     /// All raw clear paths detected this frame.
     @Published var rawPaths: [ClearPath] = []
+    /// Per-column depth profile (0=far, 1=near) for the azimuth bar visualization.
+    @Published var depthProfile: [Float] = []
     /// 0→1 fraction of the required sustain window.
     @Published var beaconSustainProgress: Float = 0
 
     // MARK: - Audio graph
 
-    private let avEngine     = AVAudioEngine()
-    private let environment  = AVAudioEnvironmentNode()
-    private let reverb       = AVAudioUnitReverb()
+    private let avEngine    = AVAudioEngine()
+    private let environment = AVAudioEnvironmentNode()
+    private let reverb      = AVAudioUnitReverb()
 
-    private var obstacleVoices: [DepthZone: FMObstacleVoice] = [:]
-    private var obstacleNodes:  [DepthZone: AVAudioSourceNode] = [:]
+    // Voice pool — 8 repositionable obstacle voices
+    private let poolSize = 8
+    private var poolVoices: [FMObstacleVoice] = []
+    private var poolNodes:  [AVAudioSourceNode] = []
+    /// Carrier frequencies spread across a warm octave (F3 → D4).
+    private let poolFrequencies: [Float] = [175, 190, 207, 220, 240, 256, 272, 290]
+    /// Currently assigned world bearing per pool slot (nil = unassigned).
+    private var poolAssignment: [Float?] = []
 
-    private let beaconVoice: FMBeaconVoice
+    private let beaconVoice: ArpeggioBeaconVoice
     private var beaconNode: AVAudioSourceNode?
 
     // MARK: - Haptics
 
     let haptics = NavigationHapticEngine()
 
-    // MARK: - Tracking
+    // MARK: - World map (360° obstacle memory)
+
+    private let worldMap = WorldObstacleMap()
+
+    // MARK: - Zone tracking (for haptics only)
 
     private let memory = SurfaceMemory()
 
@@ -223,12 +254,14 @@ final class SpatialAudioEngine: ObservableObject {
 
     private let motion = CMMotionManager()
     private var trackPhoneOrientation = true
+    /// Current phone heading in radians from CMAttitude.yaw.
+    private var currentHeading: Float = 0
 
     // MARK: - Constants
 
-    private let sampleRate:       Double = 44100
-    private let peakObstacleVol:  Float  = 0.40
-    private let peakBeaconVol:    Float  = 0.30
+    private let sampleRate:      Double = 44100
+    private let peakObstacleVol: Float  = 0.40
+    private let peakBeaconVol:   Float  = 0.30
 
     // MARK: - Beacon temporal state
 
@@ -248,7 +281,8 @@ final class SpatialAudioEngine: ObservableObject {
     // MARK: - Init
 
     init() {
-        beaconVoice = FMBeaconVoice(sampleRate: Float(sampleRate))
+        poolAssignment = [Float?](repeating: nil, count: poolSize)
+        beaconVoice = ArpeggioBeaconVoice(sampleRate: Float(sampleRate))
         buildAudioGraph()
         registerSessionObservers()
     }
@@ -265,20 +299,26 @@ final class SpatialAudioEngine: ObservableObject {
     func update(depthMap: [Float], width: Int, height: Int) {
         guard isEnabled, avEngine.isRunning else { return }
 
-        let rawZones = DepthZoneSampler.sample(depthMap: depthMap, width: width, height: height)
-        let surfaces = memory.update(rawZones: rawZones)
-        applyObstacles(surfaces)
+        let scanResult = PathFinder.scan(depthMap: depthMap, width: width, height: height)
+        depthProfile = scanResult.profile
+        rawPaths = scanResult.paths
 
-        let paths = PathFinder.findClearPaths(depthMap: depthMap, width: width, height: height)
-        rawPaths = paths
-        applyBeacon(paths)
+        // 360° world-space obstacle audio
+        let obstacles = worldMap.update(profile: scanResult.profile, heading: currentHeading)
+        applyVoicePool(obstacles)
 
+        // Beacon
+        applyBeacon(scanResult.paths)
+
+        // Haptics (zone-based)
         if hapticsEnabled {
+            let rawZones = DepthZoneSampler.sample(depthMap: depthMap, width: width, height: height)
+            let surfaces = memory.update(rawZones: rawZones)
             haptics.update(surfaces: surfaces)
         }
 
         updateCount += 1
-        if updateCount % 45 == 1 { logDiagnostics(surfaces: surfaces, paths: paths) }
+        if updateCount % 45 == 1 { logDiagnostics(obstacles: obstacles, paths: scanResult.paths) }
     }
 
     /// In glasses mode the phone is in a pocket — don't use its IMU for head orientation.
@@ -286,6 +326,7 @@ final class SpatialAudioEngine: ObservableObject {
         trackPhoneOrientation = !glasses
         if glasses {
             motion.stopDeviceMotionUpdates()
+            currentHeading = 0
             environment.listenerAngularOrientation =
                 AVAudio3DAngularOrientation(yaw: 0, pitch: 0, roll: 0)
         } else {
@@ -310,14 +351,18 @@ final class SpatialAudioEngine: ObservableObject {
         else                     { environment.renderingAlgorithm = .HRTF   }
 
         environment.listenerPosition = AVAudio3DPoint(x: 0, y: 0, z: 0)
-        environment.distanceAttenuationParameters.rolloffFactor   = 0
-        environment.distanceAttenuationParameters.maximumDistance = 1_000
 
-        // --- Obstacle nodes (one FM voice per zone) ---
-        for zone in DepthZone.allCases {
-            let voice = FMObstacleVoice(carrierFreq: zone.carrierFrequency,
-                                         sampleRate: Float(sampleRate))
-            obstacleVoices[zone] = voice
+        // Distance attenuation for natural HRTF depth cues
+        environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
+        environment.distanceAttenuationParameters.referenceDistance = 1.0
+        environment.distanceAttenuationParameters.maximumDistance   = 15.0
+        environment.distanceAttenuationParameters.rolloffFactor    = 0.5
+
+        // --- Voice pool (8 repositionable FM obstacle sources) ---
+        for i in 0..<poolSize {
+            let freq = poolFrequencies[i]
+            let voice = FMObstacleVoice(carrierFreq: freq, sampleRate: Float(sampleRate))
+            poolVoices.append(voice)
 
             let node = AVAudioSourceNode(format: mono) { [voice] _, _, frameCount, abl in
                 let ptr = UnsafeMutableAudioBufferListPointer(abl)
@@ -328,11 +373,11 @@ final class SpatialAudioEngine: ObservableObject {
             }
             avEngine.attach(node)
             avEngine.connect(node, to: environment, format: mono)
-            node.position = zone.audioPosition
-            obstacleNodes[zone] = node
+            node.position = AVAudio3DPoint(x: 0, y: 0, z: -5)
+            poolNodes.append(node)
         }
 
-        // --- Path beacon (FM singing-bowl pad) ---
+        // --- Path beacon (Karplus-Strong harp arpeggio) ---
         let bv = beaconVoice
         let bNode = AVAudioSourceNode(format: mono) { [bv] _, _, frameCount, abl in
             let ptr = UnsafeMutableAudioBufferListPointer(abl)
@@ -361,7 +406,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
         if trackPhoneOrientation { startMotionTracking() }
         haptics.start()
-        print("[SpatialAudio] Started")
+        print("[SpatialAudio] Started — 360° mode, \(poolSize) voice pool")
     }
 
     private func configureSession() {
@@ -376,12 +421,14 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     private func stopEngine() {
-        obstacleVoices.values.forEach { $0.targetVolume = 0 }
+        poolVoices.forEach { $0.targetVolume = 0 }
+        poolAssignment = [Float?](repeating: nil, count: poolSize)
         beaconVoice.targetVolume = 0
         beaconSustainCount    = 0
         beaconConfEMA         = 0
         activePath            = nil
         rawPaths              = []
+        depthProfile          = []
         beaconSustainProgress = 0
 
         haptics.stop()
@@ -390,6 +437,7 @@ final class SpatialAudioEngine: ObservableObject {
             self?.avEngine.stop()
         }
         motion.stopDeviceMotionUpdates()
+        worldMap.reset()
         memory.reset()
         print("[SpatialAudio] Stopped")
     }
@@ -448,47 +496,113 @@ final class SpatialAudioEngine: ObservableObject {
         guard motion.isDeviceMotionAvailable else { return }
         motion.deviceMotionUpdateInterval = 1.0 / 30
         motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
-            guard let att = data?.attitude else { return }
-            self?.environment.listenerAngularOrientation = AVAudio3DAngularOrientation(
+            guard let self, let att = data?.attitude else { return }
+            self.currentHeading = Float(att.yaw)
+            self.environment.listenerAngularOrientation = AVAudio3DAngularOrientation(
                 yaw:   Float(att.yaw   * 180 / .pi),
                 pitch: Float(att.pitch * 180 / .pi),
                 roll:  Float(att.roll  * 180 / .pi))
         }
     }
 
-    // MARK: - Obstacle audio
+    // MARK: - Voice pool assignment
 
-    private func applyObstacles(_ surfaces: [SurfaceSnapshot]) {
-        obstacleVoices.values.forEach {
-            $0.targetVolume    = 0
-            $0.targetModIndex  = 0.15
-            $0.targetPulseRate = 0.6
+    /// Assigns the top world obstacles to the voice pool with stable matching.
+    private func applyVoicePool(_ obstacles: [WorldObstacle]) {
+        let topN = Array(obstacles.prefix(poolSize))
+        var used = Set<Int>()          // pool indices already claimed
+        var matched = Set<Int>()       // obstacle indices already matched
+        var assignments: [(pool: Int, obstacle: Int)] = []
+
+        // Pass 1: match obstacles to voices that were already assigned nearby
+        for (oi, obs) in topN.enumerated() {
+            var bestSlot = -1
+            var bestDist: Float = .greatestFiniteMagnitude
+            for pi in 0..<poolSize where !used.contains(pi) {
+                guard let prev = poolAssignment[pi] else { continue }
+                let d = bearingDistance(prev, obs.bearing)
+                if d < bestDist { bestDist = d; bestSlot = pi }
+            }
+            if bestSlot >= 0, bestDist < 0.35 {  // ~20° tolerance
+                assignments.append((bestSlot, oi))
+                used.insert(bestSlot)
+                matched.insert(oi)
+            }
         }
 
-        let weights: [Float] = [1.0, 0.30, 0.10]
-        for (idx, s) in surfaces.enumerated() {
-            guard let voice = obstacleVoices[s.zone] else { continue }
-            let w = idx < weights.count ? weights[idx] : weights.last!
+        // Pass 2: assign remaining obstacles to free voices (prefer quietest)
+        for (oi, _) in topN.enumerated() where !matched.contains(oi) {
+            var bestSlot = -1
+            var bestVol: Float = .greatestFiniteMagnitude
+            for pi in 0..<poolSize where !used.contains(pi) {
+                let v = poolVoices[pi].targetVolume
+                if v < bestVol { bestVol = v; bestSlot = pi }
+            }
+            if bestSlot >= 0 {
+                assignments.append((bestSlot, oi))
+                used.insert(bestSlot)
+            }
+        }
 
-            voice.targetVolume    = obstacleVolume(s.depth) * w
-            voice.targetModIndex  = obstacleModIndex(s.depth)
-            voice.targetPulseRate = obstaclePulseRate(depth: s.depth, velocity: s.velocity)
+        // Silence unassigned voices
+        for pi in 0..<poolSize where !used.contains(pi) {
+            poolVoices[pi].targetVolume    = 0
+            poolVoices[pi].targetModIndex  = 0.15
+            poolVoices[pi].targetPulseRate = 0.6
+            poolAssignment[pi] = nil
+        }
+
+        // Apply parameters and position each assigned voice
+        for (pi, oi) in assignments {
+            let obs = topN[oi]
+            poolAssignment[pi] = obs.bearing
+
+            poolVoices[pi].targetVolume    = obstacleVolume(obs.depth)
+            poolVoices[pi].targetModIndex  = obstacleModIndex(obs.depth)
+            poolVoices[pi].targetPulseRate = obstaclePulseRate(depth: obs.depth, velocity: obs.velocity)
+
+            let pos = bearingToAudioPosition(bearing: obs.bearing, depth: obs.depth)
+            poolNodes[pi].position = pos
         }
     }
 
-    /// Silent below 0.20, quadratic ramp to peak at 0.85+.
+    /// Shortest angular distance on the unit circle (0 → π).
+    private func bearingDistance(_ a: Float, _ b: Float) -> Float {
+        var d = (a - b).truncatingRemainder(dividingBy: 2 * .pi)
+        if d >  .pi { d -= 2 * .pi }
+        if d < -.pi { d += 2 * .pi }
+        return abs(d)
+    }
+
+    /// Convert a world-space bearing + depth to an AVAudio3D position.
+    ///
+    /// Uses the same coordinate frame as CMAttitude.yaw: bearing 0 is the
+    /// session-start forward direction. The HRTF + listener orientation
+    /// automatically makes sources "behind" the user sound correct.
+    private func bearingToAudioPosition(bearing: Float, depth: Float) -> AVAudio3DPoint {
+        let audioDist = depthToAudioDistance(depth)
+        let x = -sinf(bearing) * audioDist
+        let z = -cosf(bearing) * audioDist
+        return AVAudio3DPoint(x: x, y: 0, z: z)
+    }
+
+    /// Maps proximity depth (0=far, 1=near) to an HRTF-space distance.
+    private func depthToAudioDistance(_ d: Float) -> Float {
+        0.8 + (1.0 - d) * 4.5      // near → 0.8m, far → 5.3m
+    }
+
+    // MARK: - Obstacle parameter curves
+
     private func obstacleVolume(_ d: Float) -> Float {
-        let t = max(0, (d - 0.20) / 0.65)
+        let t = max(0, (d - 0.15) / 0.75)
         return peakObstacleVol * t * t
     }
 
-    /// Mod index: 0.15 (near-pure sine) → 0.9 (warm overtones, never metallic).
     private func obstacleModIndex(_ d: Float) -> Float {
         let t = max(0, min(1, (d - 0.15) / 0.70))
         return 0.15 + t * 0.75
     }
 
-    /// Pulse rate: 0.6 Hz (slow breathing) → 5 Hz (alert). Velocity adds up to +1 Hz.
     private func obstaclePulseRate(depth d: Float, velocity v: Float) -> Float {
         let t = max(0, min(1, d))
         let base = 0.6 + 4.4 * powf(t, 1.5)
@@ -507,12 +621,10 @@ final class SpatialAudioEngine: ObservableObject {
             return
         }
 
-        // Direction changed significantly → reset sustain counter
         if abs(best.azimuthFraction - beaconAzimuthEMA) > 0.30 {
             beaconSustainCount = 0
         }
 
-        // Smooth confidence and azimuth
         let alpha: Float = best.confidence > beaconConfEMA ? 0.12 : 0.06
         beaconConfEMA    += alpha * (best.confidence      - beaconConfEMA)
         beaconAzimuthEMA += 0.08  * (best.azimuthFraction - beaconAzimuthEMA)
@@ -533,15 +645,16 @@ final class SpatialAudioEngine: ObservableObject {
 
         let audioX = (beaconAzimuthEMA - 0.5) * 3.6
         beaconNode?.position = AVAudio3DPoint(x: audioX, y: 0, z: -1.5)
-        beaconVoice.targetVolume = min(peakBeaconVol, beaconConfEMA * 0.70)
+        beaconVoice.targetVolume = min(peakBeaconVol, beaconConfEMA * 0.60)
         activePath = smoothed
     }
 
     // MARK: - Diagnostics
 
-    private func logDiagnostics(surfaces: [SurfaceSnapshot], paths: [ClearPath]) {
-        let obs = surfaces.isEmpty ? "(clear)" : surfaces.map { s in
-            "\(s.zone) d=\(String(format: "%.2f", s.depth))"
+    private func logDiagnostics(obstacles: [WorldObstacle], paths: [ClearPath]) {
+        let obs = obstacles.isEmpty ? "(clear)" : obstacles.prefix(3).map { o in
+            let deg = Int(o.bearing * 180 / .pi)
+            return "\(deg)° d=\(String(format: "%.2f", o.depth))"
         }.joined(separator: " | ")
         let pth = paths.first.map {
             "beacon \(String(format: "%.0f%%", ($0.azimuthFraction - 0.5) * 100)) conf=\(String(format: "%.2f", $0.confidence))"

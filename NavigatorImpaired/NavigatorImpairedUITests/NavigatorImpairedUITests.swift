@@ -1,13 +1,13 @@
 //
-//  DepthanythingTestUITests.swift
-//  DepthanythingTestUITests
+//  NavigatorImpairedUITests.swift
+//  NavigatorImpairedUITests
 //
 //  Created by Felix Fan on 26/03/2026.
 //
 
 import XCTest
 
-final class DepthanythingTestUITests: XCTestCase {
+final class NavigatorImpairedUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.

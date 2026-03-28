@@ -6,7 +6,7 @@ import MWDATMockDevice
 #endif
 
 @main
-struct DepthanythingTestApp: App {
+struct NavigatorImpairedApp: App {
     private let wearables: WearablesInterface
     @StateObject private var appVM: AppViewModel
     @StateObject private var wearablesViewModel: WearablesViewModel
@@ -20,7 +20,7 @@ struct DepthanythingTestApp: App {
             try Wearables.configure()
         } catch {
             #if DEBUG
-            NSLog("[DepthanythingTest] Wearables.configure failed: \(error)")
+            NSLog("[NavigatorImpaired] Wearables.configure failed: \(error)")
             #endif
         }
         let w = Wearables.shared

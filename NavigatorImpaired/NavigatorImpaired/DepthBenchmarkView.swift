@@ -182,11 +182,11 @@ struct DepthBenchmarkView: View {
                     HStack(spacing: 4) {
                         if vm.isUpgradingToANE {
                             ProgressView().scaleEffect(0.55).tint(.yellow)
-                            Text("GPU → ANE…").foregroundColor(.yellow)
+                            Text("Depth: GPU → ANE…").foregroundColor(.yellow)
                         } else {
                             Image(systemName: vm.computeLabel.contains("ANE") ? "bolt.fill" : "cpu")
                                 .foregroundColor(vm.computeLabel.contains("ANE") ? .green : .orange)
-                            Text(vm.computeLabel)
+                            Text("Depth: \(vm.computeLabel)")
                                 .foregroundColor(vm.computeLabel.contains("ANE") ? .green : .orange)
                         }
                     }
@@ -291,48 +291,9 @@ struct DepthBenchmarkView: View {
             .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 8))
 
-            // Azimuth bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    // Track
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.black.opacity(0.55))
-                        .frame(height: 22)
-
-                    // Raw detected gaps (dim green blobs)
-                    ForEach(Array(raw.enumerated()), id: \.offset) { _, p in
-                        let x  = CGFloat(p.azimuthFraction) * geo.size.width
-                        let w  = max(12, CGFloat(p.width) * geo.size.width)
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(Color.green.opacity(0.25))
-                            .frame(width: w, height: 16)
-                            .position(x: x, y: 11)
-                    }
-
-                    // Active sustained path (bright fill + white centre line)
-                    if let p = active {
-                        let x = CGFloat(p.azimuthFraction) * geo.size.width
-                        let w = max(16, CGFloat(p.width) * geo.size.width)
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill((sustained ? Color.green : Color.yellow).opacity(0.7))
-                            .frame(width: w, height: 16)
-                            .position(x: x, y: 11)
-                        Rectangle()
-                            .fill(Color.white)
-                            .frame(width: 2, height: 22)
-                            .position(x: x, y: 11)
-                    }
-
-                    // Zone dividers
-                    ForEach([CGFloat(1)/3, CGFloat(2)/3], id: \.self) { f in
-                        Rectangle()
-                            .fill(Color.white.opacity(0.18))
-                            .frame(width: 1, height: 22)
-                            .position(x: f * geo.size.width, y: 11)
-                    }
-                }
-            }
-            .frame(height: 22)
+            // Azimuth bar — depth-profile heat map
+            azimuthBar(active: active, sustained: sustained, geo: nil)
+                .frame(height: 26)
 
             // Zone labels
             HStack {
@@ -345,6 +306,72 @@ struct DepthBenchmarkView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
+    }
+
+    // MARK: - Azimuth bar (depth-profile heat map)
+
+    private func azimuthBar(active: ClearPath?, sustained: Bool, geo _: GeometryProxy?) -> some View {
+        let profile = vm.audioEngine.depthProfile
+        let colCount = max(profile.count, 1)
+
+        return GeometryReader { geo in
+            let barH: CGFloat = 26
+            let colW = geo.size.width / CGFloat(colCount)
+
+            ZStack(alignment: .leading) {
+                // Background track
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.black.opacity(0.55))
+                    .frame(height: barH)
+
+                // Profile columns
+                if !profile.isEmpty {
+                    HStack(spacing: 0) {
+                        ForEach(0..<colCount, id: \.self) { i in
+                            profileColor(depth: profile[i])
+                                .frame(width: colW, height: barH - 4)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .padding(.horizontal, 1)
+                }
+
+                // Active sustained path overlay
+                if let p = active {
+                    let x = CGFloat(p.azimuthFraction) * geo.size.width
+                    let w = max(colW, CGFloat(p.width) * geo.size.width)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill((sustained ? Color.green : Color.yellow).opacity(0.45))
+                        .frame(width: w, height: barH - 4)
+                        .position(x: x, y: barH / 2)
+                    Rectangle()
+                        .fill(Color.white)
+                        .frame(width: 2, height: barH)
+                        .position(x: x, y: barH / 2)
+                }
+
+                // Zone dividers (⅓, ⅔)
+                ForEach([CGFloat(1) / 3, CGFloat(2) / 3], id: \.self) { f in
+                    Rectangle()
+                        .fill(Color.white.opacity(0.18))
+                        .frame(width: 1, height: barH)
+                        .position(x: f * geo.size.width, y: barH / 2)
+                }
+            }
+        }
+    }
+
+    private func profileColor(depth: Float) -> Color {
+        switch depth {
+        case ..<PathFinder.clearThreshold:
+            return .green.opacity(0.6)
+        case ..<0.60:
+            let t = Double((depth - PathFinder.clearThreshold) / (0.60 - PathFinder.clearThreshold))
+            return Color(red: 0.9, green: 0.75 - 0.35 * t, blue: 0.1)
+        default:
+            let t = Double(min((depth - 0.60) / 0.30, 1.0))
+            return Color(red: 0.85 + 0.15 * t, green: 0.3 - 0.25 * t, blue: 0.05)
+        }
     }
 
     private func directionLabel(_ azimuth: Float) -> String {
