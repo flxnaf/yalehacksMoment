@@ -12,7 +12,7 @@ DerivedData/
 # Swift Package Manager
 .build/
 *.resolved
-!DepthanythingTest/DepthanythingTest.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+!NavigatorImpaired/NavigatorImpaired.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 # CocoaPods
 Pods/
@@ -22,13 +22,12 @@ Pods/
 .AppleDouble
 .LSOverride
 
-# CoreML model — too large for git, download with setup_model.sh
-**/*.mlpackage
+# CoreML compiled cache
 **/*.mlmodelc
 
 # Hugging Face CLI cache — must not live under the app’s synchronized folder or Xcode
 # compiles the same .mlpackage twice (“Multiple commands produce”).
-DepthanythingTest/DepthanythingTest/.cache/
+NavigatorImpaired/NavigatorImpaired/.cache/
 
 # Local Hugging Face cache for setup_model.sh
 .hf-home/
@@ -37,4 +36,4 @@ DepthanythingTest/DepthanythingTest/.cache/
 meta-wearables-dat-ios/
 
 # VisionClaw — real API keys (never commit). Template: VisionClaw/Secrets.swift.example
-DepthanythingTest/DepthanythingTest/VisionClaw/Secrets.swift
+NavigatorImpaired/NavigatorImpaired/VisionClaw/Secrets.swift

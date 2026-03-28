@@ -72,72 +72,60 @@ final class FMObstacleVoice {
     }
 }
 
-// MARK: - FMBeaconVoice
+// MARK: - ChordBeaconVoice
 
-/// Karplus-Strong plucked-string beacon producing a repeating harp/kalimba arpeggio.
+/// Continuous pad-chord beacon using detuned saw-triangle hybrid oscillators
+/// with built-in chorus and a Schroeder reverb tail.
 ///
-/// Instead of a continuous synth chord, this plays C5 → E5 → G5 as naturally
-/// decaying plucked notes, cycling every ~2 seconds. Karplus-Strong works by
-/// exciting a delay line with filtered noise and repeatedly averaging adjacent
-/// samples — the result is a physically realistic vibrating-string timbre with
-/// no synthetic character.
+/// Plays C5 + E5 + G5 simultaneously as a sustained chord. Each note is
+/// rendered by two slightly detuned oscillators (±1.5 Hz) to create a natural
+/// chorus/ensemble effect. A gentle LFO vibrato adds organic movement.
+/// Four allpass-feedback delay lines create a lush reverb tail inside the
+/// voice itself, so the chord shimmers even before the engine's global reverb.
 ///
-/// The arpeggio pattern makes the beacon musical and immediately recognisable
-/// as "the safe direction sound," clearly distinct from the obstacle FM tones.
-final class ArpeggioBeaconVoice {
+/// The result is a warm, ambient "safe direction" pad that's immediately
+/// distinct from the FM obstacle tones.
+final class ChordBeaconVoice {
 
     var targetVolume: Float = 0
 
     private let sr: Float
     private var currentVolume: Float = 0
-    private let slewRate: Float = 0.0005
+    private let slewRate: Float = 0.0006
 
-    // Arpeggio state
-    private let noteFreqs: [Float] = [523.25, 659.25, 783.99]  // C5, E5, G5
-    private var currentNote = 0
-    private var samplesSinceLastPluck = 0
-    private let samplesPerNote: Int    // ~0.6 s per note
+    // Chord: C5, E5, G5 — each with a detuned pair for chorus
+    private let baseFreqs: [Float] = [523.25, 659.25, 783.99]
+    private let detune: Float = 1.5                       // Hz spread per voice
+    private var phases: [Float]                            // 6 oscillators (2 per note)
 
-    // Karplus-Strong delay lines (one per note for overlap / ring-out)
-    private var lines: [KSLine]
+    // Vibrato LFO
+    private var lfoPhase: Float = 0
+    private let lfoRate:  Float = 3.8                     // Hz — gentle shimmer
+    private let lfoDepth: Float = 0.0035                  // pitch deviation
 
-    private struct KSLine {
-        var buffer: [Float]
-        var writePos: Int = 0
-        let length: Int
-        var energy: Float = 0
-        let decay: Float          // per-sample decay (controls ring time)
-    }
+    // Sub-octave body (C4 at low volume)
+    private var subPhase: Float = 0
+    private let subFreq:  Float = 261.63
+
+    // LP filter for warmth
+    private var lpState: Float = 0
+    private let lpAlpha: Float = 0.38
+
+    // Built-in Schroeder reverb (4 comb lines)
+    private var combBuffers: [[Float]]
+    private var combIndices: [Int]
+    private let combLengths: [Int]
+    private let combFeedback: Float = 0.72
 
     init(sampleRate: Float) {
         self.sr = sampleRate
-        self.samplesPerNote = Int(sampleRate * 0.65)
+        self.phases = [Float](repeating: 0, count: 6)
 
-        var ls: [KSLine] = []
-        for freq in [523.25, 659.25, 783.99] as [Float] {
-            let len = max(2, Int(sampleRate / freq))
-            ls.append(KSLine(
-                buffer: [Float](repeating: 0, count: len),
-                length: len,
-                decay: 0.998      // warm decay — rings for ~1.5 s
-            ))
-        }
-        self.lines = ls
-    }
-
-    /// Trigger a pluck on the given note index by filling its delay line with
-    /// band-limited noise shaped by a gentle low-pass.
-    private func pluck(note idx: Int) {
-        let len = lines[idx].length
-        var prev: Float = 0
-        for i in 0..<len {
-            let noise = Float.random(in: -1...1)
-            let filtered = 0.5 * noise + 0.5 * prev
-            lines[idx].buffer[i] = filtered
-            prev = filtered
-        }
-        lines[idx].writePos = 0
-        lines[idx].energy = 1.0
+        // Comb delay lengths: prime-ish sample counts for ~25-45 ms at 44100
+        let lengths = [1117, 1367, 1559, 1801]
+        self.combLengths = lengths
+        self.combBuffers = lengths.map { [Float](repeating: 0, count: $0) }
+        self.combIndices = [Int](repeating: 0, count: lengths.count)
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
@@ -146,38 +134,57 @@ final class ArpeggioBeaconVoice {
         for i in 0..<frameCount {
             currentVolume += (tv - currentVolume) * slewRate
 
-            // Trigger next note in arpeggio when it's time
-            if currentVolume > 0.01 {
-                samplesSinceLastPluck += 1
-                if samplesSinceLastPluck >= samplesPerNote {
-                    pluck(note: currentNote)
-                    currentNote = (currentNote + 1) % noteFreqs.count
-                    samplesSinceLastPluck = 0
-                }
-            } else {
-                samplesSinceLastPluck = samplesPerNote - 1
+            // LFO vibrato
+            let lfo = 1.0 + lfoDepth * sinf(2 * .pi * lfoPhase)
+            lfoPhase += lfoRate / sr
+            if lfoPhase >= 1.0 { lfoPhase -= 1.0 }
+
+            // Mix the 6 oscillators (2 per chord tone, detuned)
+            var dry: Float = 0
+            for n in 0..<3 {
+                let fA = (baseFreqs[n] - detune) * lfo
+                let fB = (baseFreqs[n] + detune) * lfo
+
+                let idxA = n * 2
+                let idxB = n * 2 + 1
+
+                // Rounded-saw shape: sin + 0.3*sin(2x) gives richer harmonics than pure sine
+                let oscA = sinf(2 * .pi * phases[idxA])
+                       + 0.3 * sinf(4 * .pi * phases[idxA])
+                let oscB = sinf(2 * .pi * phases[idxB])
+                       + 0.3 * sinf(4 * .pi * phases[idxB])
+
+                dry += (oscA + oscB) * 0.5
+
+                phases[idxA] += fA / sr
+                phases[idxB] += fB / sr
+                if phases[idxA] >= 1.0 { phases[idxA] -= 1.0 }
+                if phases[idxB] >= 1.0 { phases[idxB] -= 1.0 }
             }
 
-            // Sum all active lines (notes ring out and overlap naturally)
-            var sample: Float = 0
-            for li in 0..<lines.count {
-                guard lines[li].energy > 0.001 else { continue }
+            // Sub-octave for body
+            let sub = sinf(2 * .pi * subPhase) * 0.25
+            subPhase += subFreq * lfo / sr
+            if subPhase >= 1.0 { subPhase -= 1.0 }
 
-                let len = lines[li].length
-                let pos = lines[li].writePos
-                let cur = lines[li].buffer[pos]
-                let next = lines[li].buffer[(pos + 1) % len]
+            dry = (dry / 3.0 + sub) * currentVolume
 
-                // Karplus-Strong averaging filter — this is what creates the string sound
-                let avg = lines[li].decay * 0.5 * (cur + next)
-                lines[li].buffer[pos] = avg
-                lines[li].writePos = (pos + 1) % len
-                lines[li].energy *= lines[li].decay
+            // LP filter
+            lpState = lpAlpha * dry + (1 - lpAlpha) * lpState
 
-                sample += cur
+            // Schroeder comb reverb
+            var wet: Float = 0
+            for c in 0..<combLengths.count {
+                let idx = combIndices[c]
+                let delayed = combBuffers[c][idx]
+                let mixed = lpState + delayed * combFeedback
+                combBuffers[c][idx] = mixed
+                combIndices[c] = (idx + 1) % combLengths[c]
+                wet += delayed
             }
+            wet *= 0.20
 
-            buffer[i] = sample * 0.45 * currentVolume
+            buffer[i] = lpState * 0.70 + wet
         }
     }
 }
@@ -194,8 +201,9 @@ final class ArpeggioBeaconVoice {
 ///   earlier) persist and fade gradually, giving continuous spatial awareness.
 ///
 /// **Path beacon** (single moving source)
-///   Karplus-Strong harp arpeggio (C5 → E5 → G5). Positioned at the widest
-///   clear gap. Tells the user: "walk TOWARD this sound."
+///   Continuous C-major pad chord (C5 + E5 + G5) with detuned chorus,
+///   sub-octave, and built-in reverb. Positioned at the widest clear gap.
+///   Tells the user: "walk TOWARD this sound."
 ///
 /// **Haptics** (via NavigationHapticEngine)
 ///   Continuous vibration with intensity/sharpness mapped to proximity.
@@ -235,7 +243,7 @@ final class SpatialAudioEngine: ObservableObject {
     /// Currently assigned world bearing per pool slot (nil = unassigned).
     private var poolAssignment: [Float?] = []
 
-    private let beaconVoice: ArpeggioBeaconVoice
+    private let beaconVoice: ChordBeaconVoice
     private var beaconNode: AVAudioSourceNode?
 
     // MARK: - Haptics
@@ -282,7 +290,7 @@ final class SpatialAudioEngine: ObservableObject {
 
     init() {
         poolAssignment = [Float?](repeating: nil, count: poolSize)
-        beaconVoice = ArpeggioBeaconVoice(sampleRate: Float(sampleRate))
+        beaconVoice = ChordBeaconVoice(sampleRate: Float(sampleRate))
         buildAudioGraph()
         registerSessionObservers()
     }
