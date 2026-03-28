@@ -20,10 +20,10 @@ This requires Python 3 and downloads `DepthAnythingV2SmallF16.mlpackage` from Hu
 
 ```bash
 pip3 install huggingface_hub
-huggingface-cli download julien-c/depth-anything-v2-small-hf \
-  DepthAnythingV2SmallF16.mlpackage \
+python3 -m huggingface_hub.cli.hf download apple/coreml-depth-anything-v2-small \
+  --repo-type model \
   --local-dir DepthanythingTest/DepthanythingTest \
-  --local-dir-use-symlinks False
+  --include "DepthAnythingV2SmallF16.mlpackage/*"
 ```
 
 ### 2. Open in Xcode
@@ -32,7 +32,7 @@ huggingface-cli download julien-c/depth-anything-v2-small-hf \
 open DepthanythingTest/DepthanythingTest.xcodeproj
 ```
 
-Xcode will automatically resolve the Meta Wearables SDK via Swift Package Manager.
+Xcode resolves **Meta Wearables DAT** and **WebRTC** (stasel, pinned to 140.0.0) via Swift Package Manager.
 
 ### 3. Build and run on a physical iPhone
 
@@ -62,6 +62,7 @@ To use the Meta Ray-Ban camera instead of the phone camera:
 - Per-frame latency stats (now / avg / min / max)
 - Toggle depth overlay on/off
 - Adjustable overlay opacity
+- **Vision** tab: VisionClaw features (Gemini Live, WebRTC viewer, OpenClaw) — configure `VisionClaw/Secrets.swift` from `Secrets.swift.example` for API keys.
 
 ---
 

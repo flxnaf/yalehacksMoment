@@ -1,9 +1,8 @@
 import SwiftUI
 
 struct DepthBenchmarkView: View {
-    @StateObject private var vm    = DepthBenchmarkViewModel()
-    @StateObject private var cam   = PhoneCameraManager()
-    @EnvironmentObject  private var appVM: AppViewModel
+    @StateObject private var vm = DepthBenchmarkViewModel()
+    @EnvironmentObject private var appVM: AppViewModel
 
     var body: some View {
         ZStack {
@@ -36,6 +35,7 @@ struct DepthBenchmarkView: View {
             VStack {
                 topBar
                 Spacer()
+                clearPathPanel
                 sourcePicker
                 if !vm.modelLoaded { modelBar }
                 bottomControls
@@ -44,6 +44,14 @@ struct DepthBenchmarkView: View {
         .onAppear {
             vm.phoneCam.start()
             vm.startModelLoad()
+        }
+        .onChange(of: appVM.registrationState) { oldState, newState in
+            guard vm.activeSource == .glasses, newState == .registered else { return }
+            // `configureIfNeeded()` can jump `.unavailable → .registered` in the same turn as Ray-Ban
+            // select; `beginGlassesStreaming` already starts the session. A second `startStreaming()`
+            // begins with `session.stop()` and kills the feed immediately.
+            guard oldState == .registering || oldState == .available else { return }
+            vm.onGlassesRegistrationReady()
         }
         .alert("Error", isPresented: $appVM.showError) {
             Button("OK") { appVM.dismissError() }
@@ -54,8 +62,12 @@ struct DepthBenchmarkView: View {
 
     private var statusLabel: String {
         switch vm.activeSource {
-        case .phone:   return vm.phoneCam.statusMessage
-        case .glasses: return vm.glassesStatus
+        case .phone: return vm.phoneCam.statusMessage
+        case .glasses:
+            if vm.currentFrame == nil, vm.glassesStatus == "Streaming" {
+                return "Streaming — building preview…"
+            }
+            return vm.glassesStatus
         }
     }
 
@@ -95,18 +107,37 @@ struct DepthBenchmarkView: View {
         HStack(alignment: .top) {
             statsCard
             Spacer()
-            Button {
-                withAnimation { vm.showDepthOverlay.toggle() }
-            } label: {
-                VStack(spacing: 3) {
-                    Image(systemName: vm.showDepthOverlay ? "eye" : "eye.slash")
-                        .font(.system(size: 18))
-                    Text("Depth").font(.system(size: 9, weight: .medium))
+            VStack(spacing: 8) {
+                Button {
+                    withAnimation { vm.showDepthOverlay.toggle() }
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: vm.showDepthOverlay ? "eye" : "eye.slash")
+                            .font(.system(size: 18))
+                        Text("Depth").font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
-                .foregroundColor(.white)
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                Button {
+                    vm.audioEngine.isEnabled.toggle()
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: vm.audioEngine.isEnabled
+                              ? "waveform.circle.fill"
+                              : "waveform.circle")
+                            .font(.system(size: 18))
+                            .foregroundColor(vm.audioEngine.isEnabled ? .green : .white)
+                        Text("Audio").font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(.ultraThinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
             }
         }
         .padding(.horizontal, 16).padding(.top, 8)
@@ -117,7 +148,7 @@ struct DepthBenchmarkView: View {
             if vm.totalFrames == 0 {
                 HStack(spacing: 6) {
                     if !vm.modelLoaded { ProgressView().scaleEffect(0.7).tint(.white) }
-                    Text(vm.modelLoaded ? "Waiting for frames…" : "Compiling model…")
+                    Text(vm.modelLoaded ? "Waiting for frames…" : "Loading model…")
                         .foregroundColor(.white.opacity(0.7))
                 }
                 .font(.caption)
@@ -128,6 +159,22 @@ struct DepthBenchmarkView: View {
                 statRow("Max", vm.maxMs)
                 Text("Frames: \(vm.totalFrames)")
                     .foregroundColor(.white.opacity(0.6)).font(.caption2)
+
+                // Compute backend badge
+                if !vm.computeLabel.isEmpty {
+                    HStack(spacing: 4) {
+                        if vm.isUpgradingToANE {
+                            ProgressView().scaleEffect(0.55).tint(.yellow)
+                            Text("GPU → ANE…").foregroundColor(.yellow)
+                        } else {
+                            Image(systemName: vm.computeLabel.contains("ANE") ? "bolt.fill" : "cpu")
+                                .foregroundColor(vm.computeLabel.contains("ANE") ? .green : .orange)
+                            Text(vm.computeLabel)
+                                .foregroundColor(vm.computeLabel.contains("ANE") ? .green : .orange)
+                        }
+                    }
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                }
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -174,6 +221,121 @@ struct DepthBenchmarkView: View {
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 16).padding(.bottom, 8)
+    }
+
+    // MARK: - Clear path debug panel
+
+    private var clearPathPanel: some View {
+        let active    = vm.audioEngine.activePath
+        let raw       = vm.audioEngine.rawPaths
+        let progress  = vm.audioEngine.beaconSustainProgress
+        let sustained = progress >= 1.0
+
+        return VStack(spacing: 5) {
+
+            // Status label
+            HStack(spacing: 6) {
+                if let p = active {
+                    Image(systemName: sustained ? "arrow.forward.circle.fill" : "circle.dotted")
+                        .foregroundColor(sustained ? .green : .yellow)
+                    Text(sustained ? "CLEAR PATH" : "DETECTING…")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(sustained ? .green : .yellow)
+                    Text(directionLabel(p.azimuthFraction))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.8))
+                    Text(String(format: "conf %.0f%%", p.confidence * 100))
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                } else if !raw.isEmpty {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundColor(.yellow)
+                    Text("BUILDING…")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.yellow)
+                } else {
+                    Image(systemName: "xmark.circle")
+                        .foregroundColor(.red.opacity(0.7))
+                    Text("NO CLEAR PATH")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundColor(.red.opacity(0.7))
+                }
+                Spacer()
+                // Sustain progress dots
+                HStack(spacing: 3) {
+                    ForEach(0..<5, id: \.self) { i in
+                        Circle()
+                            .fill(Float(i) / 5.0 < progress ? Color.green : Color.white.opacity(0.2))
+                            .frame(width: 5, height: 5)
+                    }
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            // Azimuth bar
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    // Track
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.black.opacity(0.55))
+                        .frame(height: 22)
+
+                    // Raw detected gaps (dim green blobs)
+                    ForEach(Array(raw.enumerated()), id: \.offset) { _, p in
+                        let x  = CGFloat(p.azimuthFraction) * geo.size.width
+                        let w  = max(12, CGFloat(p.width) * geo.size.width)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color.green.opacity(0.25))
+                            .frame(width: w, height: 16)
+                            .position(x: x, y: 11)
+                    }
+
+                    // Active sustained path (bright fill + white centre line)
+                    if let p = active {
+                        let x = CGFloat(p.azimuthFraction) * geo.size.width
+                        let w = max(16, CGFloat(p.width) * geo.size.width)
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill((sustained ? Color.green : Color.yellow).opacity(0.7))
+                            .frame(width: w, height: 16)
+                            .position(x: x, y: 11)
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: 2, height: 22)
+                            .position(x: x, y: 11)
+                    }
+
+                    // Zone dividers
+                    ForEach([CGFloat(1)/3, CGFloat(2)/3], id: \.self) { f in
+                        Rectangle()
+                            .fill(Color.white.opacity(0.18))
+                            .frame(width: 1, height: 22)
+                            .position(x: f * geo.size.width, y: 11)
+                    }
+                }
+            }
+            .frame(height: 22)
+
+            // Zone labels
+            HStack {
+                Text("LEFT").font(.system(size: 7, design: .monospaced)).foregroundColor(.white.opacity(0.35))
+                Spacer()
+                Text("CENTER").font(.system(size: 7, design: .monospaced)).foregroundColor(.white.opacity(0.35))
+                Spacer()
+                Text("RIGHT").font(.system(size: 7, design: .monospaced)).foregroundColor(.white.opacity(0.35))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
+    }
+
+    private func directionLabel(_ azimuth: Float) -> String {
+        switch azimuth {
+        case ..<0.33: return "← LEFT"
+        case 0.67...: return "RIGHT →"
+        default:      return "↑ CENTER"
+        }
     }
 
     // MARK: - Bottom controls

@@ -4,6 +4,12 @@
 
 set -e
 
+SCRIPT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_ROOT"
+# Keep HF caches out of the Xcode-synced app folder (duplicate .mlpackage breaks the build).
+export HF_HOME="$SCRIPT_ROOT/.hf-home"
+mkdir -p "$HF_HOME"
+
 DEST="DepthanythingTest/DepthanythingTest/DepthAnythingV2SmallF16.mlpackage"
 
 if [ -d "$DEST" ]; then
@@ -13,17 +19,16 @@ fi
 
 echo "📦 Downloading Depth Anything V2 Small (Float16) CoreML model..."
 
-if ! command -v huggingface-cli &> /dev/null; then
-  echo "⚠️  huggingface-cli not found. Installing via pip..."
+if ! python3 -c "import huggingface_hub" &> /dev/null; then
+  echo "⚠️  huggingface_hub not found. Installing via pip..."
   pip3 install --quiet huggingface_hub
 fi
 
-huggingface-cli download \
-  julien-c/depth-anything-v2-small-hf \
-  DepthAnythingV2SmallF16.mlpackage \
+python3 -m huggingface_hub.cli.hf download \
+  apple/coreml-depth-anything-v2-small \
   --repo-type model \
   --local-dir "$(dirname "$DEST")" \
-  --local-dir-use-symlinks False
+  --include "DepthAnythingV2SmallF16.mlpackage/*"
 
 echo "✅ Model downloaded to $DEST"
 echo "Now open DepthanythingTest/DepthanythingTest.xcodeproj in Xcode."

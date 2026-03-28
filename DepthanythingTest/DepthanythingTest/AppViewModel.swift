@@ -1,7 +1,7 @@
 import SwiftUI
 import MWDATCore
 
-#if DEBUG
+#if canImport(MWDATMockDevice)
 import MWDATMockDevice
 #endif
 
@@ -16,23 +16,37 @@ class AppViewModel: ObservableObject {
     @Published var showError = false
     @Published var errorMessage = ""
 
-    private(set) var wearables: WearablesInterface?
+    private(set) var wearables: WearablesInterface
     private var registrationTask: Task<Void, Never>?
 
-    // Called once when user first switches to Ray-Ban mode
-    func configureIfNeeded() {
-        guard wearables == nil else { return }
-        do {
-            try Wearables.configure()
-            wearables = Wearables.shared
-            startObserving()
-        } catch {
-            showError("SDK configure failed: \(error.localizedDescription)")
+    init(wearables: WearablesInterface) {
+        self.wearables = wearables
+        self.registrationState = wearables.registrationState
+        startObserving()
+    }
+
+    /// Kept for DepthBenchmarkView when switching to Ray-Ban; SDK is already configured at app launch.
+    func configureIfNeeded() {}
+
+    /// Meta OAuth returns to your app via depthanythingtest://
+    func handleIncomingURL(_ url: URL) {
+        Task { @MainActor in
+            let w = wearables
+            do {
+                let handled = try await w.handleUrl(url)
+                if handled {
+                    registrationState = w.registrationState
+                }
+            } catch let error as RegistrationError {
+                presentError(error.description)
+            } catch {
+                presentError("Meta sign-in: \(error.localizedDescription)")
+            }
         }
     }
 
     private func startObserving() {
-        guard let w = wearables else { return }
+        let w = wearables
         registrationTask = Task { [weak self] in
             for await state in w.registrationStateStream() {
                 self?.registrationState = state
@@ -41,22 +55,22 @@ class AppViewModel: ObservableObject {
     }
 
     func connect() {
-        guard let w = wearables else { return }
+        let w = wearables
         Task {
             do { try await w.startRegistration() }
-            catch { showError(error.localizedDescription) }
+            catch { presentError(error.localizedDescription) }
         }
     }
 
     func disconnect() {
-        guard let w = wearables else { return }
+        let w = wearables
         Task {
             do { try await w.startUnregistration() }
-            catch { showError(error.localizedDescription) }
+            catch { presentError(error.localizedDescription) }
         }
     }
 
-    func showError(_ msg: String) { errorMessage = msg; showError = true }
+    func presentError(_ msg: String) { errorMessage = msg; showError = true }
     func dismissError() { showError = false; errorMessage = "" }
 
     deinit { registrationTask?.cancel() }
