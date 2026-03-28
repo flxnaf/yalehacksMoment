@@ -168,7 +168,6 @@ final class SpatialAudioEngine: ObservableObject {
 
     private let avEngine = AVAudioEngine()
     private let environment = AVAudioEnvironmentNode()
-    private let reverb = AVAudioUnitReverb()
 
     private let shrinePing: ShrinePingVoice
     private var shrineNode: AVAudioSourceNode?
@@ -287,13 +286,11 @@ final class SpatialAudioEngine: ObservableObject {
     private func buildAudioGraph() {
         let mono = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
-        reverb.loadFactoryPreset(.mediumHall)
-        reverb.wetDryMix = 12
-
+        // NO reverb after HRTF — reverb adds diffuse reflections that
+        // destroy the precise ITD/ILD/spectral cues from binaural rendering.
+        // The ShrinePingVoice handles its own decay character.
         avEngine.attach(environment)
-        avEngine.attach(reverb)
-        avEngine.connect(environment, to: reverb, format: nil)
-        avEngine.connect(reverb, to: avEngine.mainMixerNode, format: nil)
+        avEngine.connect(environment, to: avEngine.mainMixerNode, format: nil)
 
         if #available(iOS 15, *) { environment.renderingAlgorithm = .HRTFHQ }
         else { environment.renderingAlgorithm = .HRTF }
@@ -302,7 +299,7 @@ final class SpatialAudioEngine: ObservableObject {
         environment.distanceAttenuationParameters.distanceAttenuationModel = .inverse
         environment.distanceAttenuationParameters.referenceDistance = 0.5
         environment.distanceAttenuationParameters.maximumDistance = 20.0
-        environment.distanceAttenuationParameters.rolloffFactor = 0.6
+        environment.distanceAttenuationParameters.rolloffFactor = 1.0
 
         let voice = shrinePing
         let node = AVAudioSourceNode(format: mono) { [voice] _, _, frameCount, abl in
@@ -345,8 +342,13 @@ final class SpatialAudioEngine: ObservableObject {
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.mixWithOthers, .defaultToSpeaker, .allowBluetooth])
+            // .playAndRecord is required for Gemini mic input, but we
+            // disable the VoIP-style DSP (echo cancel, noise suppression)
+            // by using .measurement mode, which preserves the HRTF spectral
+            // cues. .allowBluetooth for AirPods, .mixWithOthers so
+            // system sounds don't kill our engine.
+            try session.setCategory(.playAndRecord, mode: .measurement,
+                                    options: [.mixWithOthers, .allowBluetooth])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             print("[SpatialAudio] Session configure failed: \(error)")
