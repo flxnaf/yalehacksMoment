@@ -4,22 +4,23 @@ import UIKit
 
 // MARK: - FMObstacleVoice
 
-/// FM synthesis voice producing a warm, soft tone for obstacle sonification.
+/// Soft, bell-like obstacle tone — warm and informational, never alarming.
 ///
-/// Uses a 1:1 carrier:modulator ratio (harmonic series) with a *low* modulation
-/// index that stays musical. Proximity adds gentle brightness, never metallic:
-///   - **Modulation index**: 0.15 (near-pure sine) → 0.9 (warm overtones, never harsh)
-///   - **Pulse rate**: subtle 0.6 Hz breathing → 5 Hz alert pulse
-///   - **Volume**: quadratic ramp from silence to peak
+/// Uses a 2:1 modulator:carrier ratio which produces even harmonics (bell/chime
+/// character) rather than the 1:1 ratio's metallic edge. The modulation index
+/// is kept very low (0.10–0.45) so the tone stays round and musical.
 ///
-/// A two-stage soft-knee envelope keeps the output warm:
-///   1. FM index capped well below metallic range
-///   2. One-pole LP filter rolls off highs above ~2.5 kHz
+/// Proximity controls:
+///   - **Mod index**: 0.10 (near-pure sine) → 0.45 (gentle bell shimmer)
+///   - **Pulse**: very gentle amplitude swell, 0.4–2.5 Hz
+///   - **Volume**: smooth ramp, never jarring
+///
+/// LP filter at ~2 kHz removes any remaining harshness.
 final class FMObstacleVoice {
 
     var targetVolume:    Float = 0
-    var targetModIndex:  Float = 0.15
-    var targetPulseRate: Float = 0.6
+    var targetModIndex:  Float = 0.10
+    var targetPulseRate: Float = 0.4
 
     private let carrierFreq: Float
     private let sr: Float
@@ -29,12 +30,12 @@ final class FMObstacleVoice {
     private var pulsePhase:   Float = 0
 
     private var currentVolume:    Float = 0
-    private var currentModIndex:  Float = 0.15
-    private var currentPulseRate: Float = 0.6
+    private var currentModIndex:  Float = 0.10
+    private var currentPulseRate: Float = 0.4
 
     private var lpState: Float = 0
-    private let lpAlpha: Float = 0.30
-    private let slewRate: Float = 0.0005
+    private let lpAlpha: Float = 0.22          // gentler LP — warmer rolloff
+    private let slewRate: Float = 0.0004
 
     init(carrierFreq: Float, sampleRate: Float) {
         self.carrierFreq = carrierFreq
@@ -51,14 +52,15 @@ final class FMObstacleVoice {
             currentModIndex  += (tmi - currentModIndex)  * slewRate
             currentPulseRate += (tpr - currentPulseRate)  * slewRate
 
-            // Subtle breathing — amplitude stays between 0.78 and 1.0
-            let pulse = 0.78 + 0.22 * sinf(2 * .pi * pulsePhase)
-            pulsePhase += max(0.2, currentPulseRate) / sr
+            // Gentle breathing — amplitude stays between 0.88 and 1.0
+            let pulse = 0.88 + 0.12 * sinf(2 * .pi * pulsePhase)
+            pulsePhase += max(0.3, currentPulseRate) / sr
             if pulsePhase >= 1.0 { pulsePhase -= 1.0 }
 
-            // FM: gentle modulation keeps the tone warm, not metallic
+            // FM with 2:1 ratio — bell/chime character, not metallic
+            let modFreq = carrierFreq * 2.0
             let mod = currentModIndex * sinf(2 * .pi * modPhase)
-            modPhase += carrierFreq / sr
+            modPhase += modFreq / sr
             if modPhase >= 1.0 { modPhase -= 1.0 }
 
             let carrier = sinf(2 * .pi * carrierPhase + mod)
@@ -239,7 +241,7 @@ final class SpatialAudioEngine: ObservableObject {
     private var poolVoices: [FMObstacleVoice] = []
     private var poolNodes:  [AVAudioSourceNode] = []
     /// Carrier frequencies spread across a warm octave (F3 → D4).
-    private let poolFrequencies: [Float] = [175, 190, 207, 220, 240, 256, 272, 290]
+    private let poolFrequencies: [Float] = [349, 370, 392, 415, 440, 466, 494, 523]
     /// Currently assigned world bearing per pool slot (nil = unassigned).
     private var poolAssignment: [Float?] = []
 
@@ -268,7 +270,7 @@ final class SpatialAudioEngine: ObservableObject {
     // MARK: - Constants
 
     private let sampleRate:      Double = 44100
-    private let peakObstacleVol: Float  = 0.40
+    private let peakObstacleVol: Float  = 0.30
     private let peakBeaconVol:   Float  = 0.30
 
     // MARK: - Beacon temporal state
@@ -608,13 +610,13 @@ final class SpatialAudioEngine: ObservableObject {
 
     private func obstacleModIndex(_ d: Float) -> Float {
         let t = max(0, min(1, (d - 0.15) / 0.70))
-        return 0.15 + t * 0.75
+        return 0.10 + t * 0.35
     }
 
     private func obstaclePulseRate(depth d: Float, velocity v: Float) -> Float {
         let t = max(0, min(1, d))
-        let base = 0.6 + 4.4 * powf(t, 1.5)
-        return min(6.0, base + max(0, v) * 1.0)
+        let base = 0.4 + 2.1 * powf(t, 1.5)
+        return min(3.0, base + max(0, v) * 0.5)
     }
 
     // MARK: - Path beacon

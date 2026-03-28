@@ -21,9 +21,9 @@ enum DepthZone: Int, CaseIterable, Hashable {
     /// Spread across F#3–C4 so each zone has a distinct pitch even without HRTF.
     var carrierFrequency: Float {
         switch self {
-        case .middleLeft:   return 185   // F#3 — warm low
-        case .middleCenter: return 220   // A3  — neutral center
-        case .middleRight:  return 262   // C4  — slightly brighter
+        case .middleLeft:   return 392   // G4  — warm mid
+        case .middleCenter: return 440   // A4  — neutral center
+        case .middleRight:  return 523   // C5  — slightly brighter
         }
     }
 }
