@@ -661,7 +661,7 @@ final class SpatialAudioEngine: ObservableObject {
     // MARK: - Path beacon
 
     private func applyBeacon(_ paths: [ClearPath]) {
-        guard let best = paths.first, best.confidence > 0.15 else {
+        guard let best = paths.first, best.confidence > 0.08 else {
             beaconSustainCount = max(0, beaconSustainCount - 3)
             beaconConfEMA *= 0.82
             beaconSustainProgress = Float(beaconSustainCount) / Float(beaconRequiredFrames)
@@ -670,13 +670,15 @@ final class SpatialAudioEngine: ObservableObject {
             return
         }
 
-        if abs(best.azimuthFraction - beaconAzimuthEMA) > 0.30 {
-            beaconSustainCount = 0
+        // If the path jumps far from the EMA, snap the EMA to it instead of
+        // resetting sustain — this way off-centre gaps still activate.
+        if abs(best.azimuthFraction - beaconAzimuthEMA) > 0.35 {
+            beaconAzimuthEMA = best.azimuthFraction
         }
 
-        let alpha: Float = best.confidence > beaconConfEMA ? 0.30 : 0.15
+        let alpha: Float = best.confidence > beaconConfEMA ? 0.35 : 0.18
         beaconConfEMA    += alpha * (best.confidence      - beaconConfEMA)
-        beaconAzimuthEMA += 0.20  * (best.azimuthFraction - beaconAzimuthEMA)
+        beaconAzimuthEMA += 0.30  * (best.azimuthFraction - beaconAzimuthEMA)
 
         beaconSustainCount = min(beaconSustainCount + 1, beaconRequiredFrames + 1)
         beaconSustainProgress = min(1, Float(beaconSustainCount) / Float(beaconRequiredFrames))

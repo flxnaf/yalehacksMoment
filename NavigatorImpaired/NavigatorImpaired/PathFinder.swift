@@ -61,7 +61,7 @@ final class PathFinder {
     /// within arm's reach (depth ~0.40+) is correctly blocked.
     static let clearThreshold: Float = 0.38
     /// A gap narrower than this fraction of frame width is ignored.
-    private static let minGapFraction: Float = 0.15
+    private static let minGapFraction: Float = 0.10
     /// Temporal EMA alpha: higher = more responsive, lower = more stable.
     private static let temporalAlpha: Float = 0.40
 
