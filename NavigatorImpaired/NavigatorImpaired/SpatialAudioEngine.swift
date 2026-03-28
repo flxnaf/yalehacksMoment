@@ -2,55 +2,43 @@ import AVFoundation
 import CoreMotion
 import UIKit
 
-// MARK: - SubBassObstacleVoice
+// MARK: - ParkingSensorVoice
 
-/// Deep, warm sub-bass hum with parking sensor beeping — felt more than heard.
+/// Clean, clear parking sensor beeping sound.
 /// Proximity controls beep intervals: slow (far) → fast (close) → continuous (very close)
 ///
-/// A triangle wave (softer than sine, no harsh partials) run through tanh
-/// waveshaping for analog warmth, then buried under three cascaded LP filters.
-/// The result is a smooth, pillowy low-end presence with parking sensor timing.
-final class SubBassObstacleVoice {
+/// Uses a pure sine wave at 880 Hz (A5) with a simple envelope for clean beeps
+/// that are audible and informative without being harsh or unpleasant.
+final class ParkingSensorVoice {
 
-    var targetVolume:    Float = 0
-    var targetBrightness: Float = 0.15
+    var targetVolume: Float = 0
     var targetBeepInterval: Float = 2.0  // seconds between beeps
 
-    private let baseFreq: Float
+    private let beepFreq: Float = 880.0  // A5 - clear, audible tone
     private let sr: Float
 
     private var phase: Float = 0
-    private var subPhase: Float = 0
 
-    private var currentVolume:     Float = 0
-    private var currentBrightness: Float = 0.15
+    private var currentVolume: Float = 0
     private var currentBeepInterval: Float = 2.0
-    private var breathPhase: Float = 0
-
-    // Three cascaded LP stages for an extremely dark rolloff
-    private var lp1: Float = 0
-    private var lp2: Float = 0
-    private var lp3: Float = 0
     private let slewRate: Float = 0.0004
 
     // Beeping state
     private var beepTimer: Float = 0
     private var isBeeping: Bool = false
     private let beepDuration: Float = 0.15    // 150ms beep duration
+    private var envelopePhase: Float = 0      // For smooth attack/decay
 
     init(carrierFreq: Float, sampleRate: Float) {
-        self.baseFreq = carrierFreq
         self.sr = sampleRate
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
         let tv  = targetVolume
-        let tb  = targetBrightness
         let tbi = targetBeepInterval
 
         for i in 0..<frameCount {
-            currentVolume     += (tv  - currentVolume)     * slewRate
-            currentBrightness += (tb  - currentBrightness) * slewRate
+            currentVolume += (tv - currentVolume) * slewRate
             currentBeepInterval += (tbi - currentBeepInterval) * slewRate
 
             // Update beep timer
@@ -60,6 +48,7 @@ final class SubBassObstacleVoice {
             if beepTimer >= currentBeepInterval {
                 beepTimer = 0
                 isBeeping = true
+                envelopePhase = 0  // Reset envelope for new beep
             }
 
             // Check if current beep should end
@@ -72,36 +61,22 @@ final class SubBassObstacleVoice {
 
             var sample: Float = 0
             if shouldPlay && currentVolume > 0.01 {
-                // Slow breath — barely perceptible volume swell
-                breathPhase += 0.4 / sr  // Fixed breath rate for beeps
-                if breathPhase >= 1.0 { breathPhase -= 1.0 }
-                let breath: Float = 0.92 + 0.08 * sinf(2 * .pi * breathPhase)
-
-                // Triangle wave: 4|2·phase - 1| - 1, range [-1, 1]
-                let tri = 4.0 * abs(2.0 * phase - 1.0) - 1.0
-                phase += baseFreq / sr
+                // Generate clean sine wave
+                let sine = sinf(2 * .pi * phase)
+                phase += beepFreq / sr
                 if phase >= 1.0 { phase -= 1.0 }
 
-                // Sub-octave sine for extra weight
-                let sub = sinf(2 * .pi * subPhase)
-                subPhase += (baseFreq * 0.5) / sr
-                if subPhase >= 1.0 { subPhase -= 1.0 }
+                // Simple envelope: quick attack, slight decay
+                let envelope: Float
+                if envelopePhase < 0.1 {  // First 10% of beep = attack
+                    envelope = envelopePhase / 0.1
+                } else {  // Rest = slight decay
+                    envelope = 1.0 - (envelopePhase - 0.1) / 0.9 * 0.3
+                }
 
-                // Mix: triangle + sub, weighted by brightness
-                let dry = tri * 0.6 + sub * (0.4 + currentBrightness * 0.15)
+                envelopePhase += 1.0 / (beepDuration * sr)
 
-                // Tanh soft-saturation — rounds off edges, adds analog warmth
-                let drive: Float = 1.4 + currentBrightness * 0.6
-                let saturated = tanhf(dry * drive)
-
-                sample = saturated * breath * currentVolume
-
-                // Triple cascaded LP — extremely dark, sub-bass only
-                let alpha: Float = 0.10 + currentBrightness * 0.04
-                lp1 = alpha * sample + (1 - alpha) * lp1
-                lp2 = alpha * lp1 + (1 - alpha) * lp2
-                lp3 = alpha * lp2 + (1 - alpha) * lp3
-                sample = lp3
+                sample = sine * envelope * currentVolume
             }
 
             buffer[i] = sample
@@ -231,7 +206,7 @@ final class ChordBeaconVoice {
 /// 360° navigation audio engine with three perceptual layers:
 ///
 /// **Obstacle layer** (pool of 8 repositionable voices)
-///   FM bell/mallet tones (175–290 Hz). Each frame, the depth profile is merged
+///   Clean parking sensor beeps (880 Hz sine waves). Each frame, the depth profile is merged
 ///   into a persistent `WorldObstacleMap` covering the full 360° around the user.
 ///   The top-N obstacles are assigned to the voice pool and positioned via HRTF
 ///   at their exact world-space bearing. Obstacles behind the user (scanned
@@ -278,10 +253,10 @@ final class SpatialAudioEngine: ObservableObject {
 
     // Voice pool — 8 repositionable obstacle voices
     private let poolSize = 8
-    private var poolVoices: [SubBassObstacleVoice] = []
+    private var poolVoices: [ParkingSensorVoice] = []
     private var poolNodes:  [AVAudioSourceNode] = []
-    /// Carrier frequencies spread across a warm sub-bass octave (F1 → D2).
-    private let poolFrequencies: [Float] = [43.65, 46.25, 49.00, 51.91, 55.00, 58.27, 61.74, 65.41]
+    /// All voices use the same clean beep frequency (880 Hz)
+    private let poolFrequencies: [Float] = [880, 880, 880, 880, 880, 880, 880, 880]
     /// Currently assigned world bearing per pool slot (nil = unassigned).
     private var poolAssignment: [Float?] = []
 
@@ -431,10 +406,10 @@ final class SpatialAudioEngine: ObservableObject {
         environment.distanceAttenuationParameters.maximumDistance   = 15.0
         environment.distanceAttenuationParameters.rolloffFactor    = 0.5
 
-        // --- Voice pool (8 repositionable FM obstacle sources) ---
+        // --- Voice pool (8 repositionable parking sensor sources) ---
         for i in 0..<poolSize {
             let freq = poolFrequencies[i]
-            let voice = SubBassObstacleVoice(carrierFreq: freq, sampleRate: Float(sampleRate))
+            let voice = ParkingSensorVoice(carrierFreq: freq, sampleRate: Float(sampleRate))
             poolVoices.append(voice)
 
             let node = AVAudioSourceNode(format: mono) { [voice] _, _, frameCount, abl in
@@ -620,8 +595,7 @@ final class SpatialAudioEngine: ObservableObject {
 
         // Silence unassigned voices
         for pi in 0..<poolSize where !used.contains(pi) {
-            poolVoices[pi].targetVolume    = 0
-            poolVoices[pi].targetBrightness = 0.15
+            poolVoices[pi].targetVolume = 0
             poolVoices[pi].targetBeepInterval = 2.0  // Default to slow beeps when silencing
             poolAssignment[pi] = nil
         }
@@ -631,8 +605,7 @@ final class SpatialAudioEngine: ObservableObject {
             let obs = topN[oi]
             poolAssignment[pi] = obs.bearing
 
-            poolVoices[pi].targetVolume    = obstacleVolume(obs.depth)
-            poolVoices[pi].targetBrightness = obstacleBrightness(obs.depth)
+            poolVoices[pi].targetVolume = obstacleVolume(obs.depth)
             poolVoices[pi].targetBeepInterval = obstacleBeepInterval(obs.depth)
 
             let pos = bearingToAudioPosition(bearing: obs.bearing, depth: obs.depth)
@@ -672,11 +645,6 @@ final class SpatialAudioEngine: ObservableObject {
         // for distant/moderate obstacles, ramps steeply for imminent ones.
         let t = max(0, (d - 0.50) / 0.50)
         return peakObstacleVol * t * t * t
-    }
-
-    private func obstacleBrightness(_ d: Float) -> Float {
-        let t = max(0, min(1, (d - 0.50) / 0.50))
-        return 0.15 + t * 0.50
     }
 
     private func obstacleBeepInterval(_ d: Float) -> Float {
