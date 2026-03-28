@@ -3,9 +3,10 @@ import Foundation
 
 /// Short throttled spoken cues driven by PathFinder clear-path results.
 ///
-/// Direction cues ("Veer left/right") are derived from the chord beacon's
-/// active path azimuth — the same data source that drives the chord.
-/// This ensures verbal cues and audio beacon always agree.
+/// Multi-path announcements ("Door to your left and right") use scene
+/// classification for context-aware labels. Single-path direction cues
+/// (veer left/right) have been removed — the beacon chord direction
+/// and Gemini voice guidance handle steering instead.
 @MainActor
 final class NavigationVerbalCueController: NSObject, ObservableObject {
 
@@ -17,12 +18,10 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
     private var prevHadPath: Bool = false
     private var prevAzimuth: Float = 0.5
 
-    private var lastDirection: Date = .distantPast
     private var lastClear: Date = .distantPast
     private var lastNoPath: Date = .distantPast
     private var lastMultiPath: Date = .distantPast
 
-    private let throttleDirection: TimeInterval = 6
     private let throttleClear: TimeInterval = 12
     private let throttleNoPath: TimeInterval = 8
     private let throttleMultiPath: TimeInterval = 10
@@ -87,29 +86,12 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
         if let path = activePath {
             noPathFrameCount = 0
 
-            let az = path.azimuthFraction
-            let isLeft = az < 0.35
-            let isRight = az > 0.65
-
-            if (isLeft || isRight), now.timeIntervalSince(lastDirection) > throttleDirection {
-                let label: String
-                if doorDetected {
-                    label = isLeft ? "Door to your left" : "Door to your right"
-                } else if corridorDetected {
-                    label = isLeft ? "Corridor to your left" : "Corridor to your right"
-                } else {
-                    label = isLeft ? "Veer left" : "Veer right"
-                }
-                speak(label)
-                lastDirection = now
-            }
-
             if !prevHadPath, now.timeIntervalSince(lastClear) > throttleClear {
                 speak("Path clear")
                 lastClear = now
             }
 
-            prevAzimuth = az
+            prevAzimuth = path.azimuthFraction
         } else {
             noPathFrameCount += 1
 

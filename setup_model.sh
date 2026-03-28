@@ -10,11 +10,11 @@ cd "$SCRIPT_ROOT"
 export HF_HOME="$SCRIPT_ROOT/.hf-home"
 mkdir -p "$HF_HOME"
 
-DEST="NavigatorImpaired/NavigatorImpaired/DepthAnythingV2SmallF16.mlpackage"
+# Hugging Face ships the Float16 variant; keep it under NavigatorImpaired/model so it is not
+# inside the file-system–synced app folder (avoids duplicate Core ML compiles if .cache appears).
+DEST="NavigatorImpaired/model/DepthAnythingV2SmallF16.mlpackage"
 APP_DIR="$(dirname "$DEST")"
 
-# Hugging Face may write .cache/ under local-dir; Xcode syncs the whole app folder and would
-# compile the same .mlpackage twice ("Multiple commands produce").
 cleanup_hf_cache_in_app() {
   rm -rf "$APP_DIR/.cache"
 }

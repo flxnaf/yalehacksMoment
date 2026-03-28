@@ -23,12 +23,10 @@ final class ElevenLabsTTSClient: @unchecked Sendable {
 
     /// Known nav cues — pre-warmed at startup.
     static let navPhrases = [
-        "Stop", "Veer left", "Veer right", "Path clear",
+        "Stop", "Path clear",
         "No clear path", "Entered new room. Turn around to exit.", "Left room.",
         "Path to your left and right", "Door to your left and right",
-        "Corridor to your left and right",
-        "Door to your left", "Door to your right",
-        "Corridor to your left", "Corridor to your right"
+        "Corridor to your left and right"
     ]
 
     // MARK: - Pre-warm

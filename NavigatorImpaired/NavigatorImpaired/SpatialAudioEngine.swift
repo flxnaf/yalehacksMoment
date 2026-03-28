@@ -232,6 +232,11 @@ final class SpatialAudioEngine: ObservableObject {
 
     // MARK: - Public API
 
+    /// True when the HRTF graph is running (depth / navigation audio active).
+    var isSpatialPipelineRunning: Bool {
+        isEnabled && avEngine.isRunning
+    }
+
     /// Called each depth frame. Obstacle pings from policy; beacon from internal PathFinder logic.
     func applyPerceptionFrame(
         depthMap: [Float],
