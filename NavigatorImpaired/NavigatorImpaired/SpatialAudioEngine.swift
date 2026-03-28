@@ -12,7 +12,7 @@ import UIKit
 ///
 /// Proximity controls:
 ///   - **Mod index**: 0.10 (near-pure sine) → 0.45 (gentle bell shimmer)
-///   - **Pulse**: very gentle amplitude swell, 0.4–2.5 Hz
+///   - **Beep interval**: 2.0s (far) → 0.1s (close) → continuous (very close)
 ///   - **Volume**: smooth ramp, never jarring
 ///
 /// LP filter at ~2 kHz removes any remaining harshness.
@@ -20,22 +20,26 @@ final class FMObstacleVoice {
 
     var targetVolume:    Float = 0
     var targetModIndex:  Float = 0.10
-    var targetPulseRate: Float = 0.4
+    var targetBeepInterval: Float = 2.0  // seconds between beeps
 
     private let carrierFreq: Float
     private let sr: Float
 
     private var carrierPhase: Float = 0
     private var modPhase:     Float = 0
-    private var pulsePhase:   Float = 0
 
     private var currentVolume:    Float = 0
     private var currentModIndex:  Float = 0.10
-    private var currentPulseRate: Float = 0.4
+    private var currentBeepInterval: Float = 2.0
 
     private var lpState: Float = 0
     private let lpAlpha: Float = 0.22          // gentler LP — warmer rolloff
     private let slewRate: Float = 0.0004
+
+    // Beeping state
+    private var beepTimer: Float = 0
+    private var isBeeping: Bool = false
+    private let beepDuration: Float = 0.15    // 150ms beep duration
 
     init(carrierFreq: Float, sampleRate: Float) {
         self.carrierFreq = carrierFreq
@@ -45,30 +49,47 @@ final class FMObstacleVoice {
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
         let tv  = targetVolume
         let tmi = targetModIndex
-        let tpr = targetPulseRate
+        let tbi = targetBeepInterval
 
         for i in 0..<frameCount {
             currentVolume    += (tv  - currentVolume)    * slewRate
             currentModIndex  += (tmi - currentModIndex)  * slewRate
-            currentPulseRate += (tpr - currentPulseRate)  * slewRate
+            currentBeepInterval += (tbi - currentBeepInterval) * slewRate
 
-            // Gentle breathing — amplitude stays between 0.88 and 1.0
-            let pulse = 0.88 + 0.12 * sinf(2 * .pi * pulsePhase)
-            pulsePhase += max(0.3, currentPulseRate) / sr
-            if pulsePhase >= 1.0 { pulsePhase -= 1.0 }
+            // Update beep timer
+            beepTimer += 1.0 / sr
+            
+            // Check if we should start a new beep
+            if beepTimer >= currentBeepInterval {
+                beepTimer = 0
+                isBeeping = true
+            }
+            
+            // Check if current beep should end
+            if isBeeping && beepTimer >= beepDuration {
+                isBeeping = false
+            }
+            
+            // Generate audio only during beep, or continuously if interval is very short
+            let shouldPlay = isBeeping || currentBeepInterval < 0.05
 
-            // FM with 2:1 ratio — bell/chime character, not metallic
-            let modFreq = carrierFreq * 2.0
-            let mod = currentModIndex * sinf(2 * .pi * modPhase)
-            modPhase += modFreq / sr
-            if modPhase >= 1.0 { modPhase -= 1.0 }
+            var sample: Float = 0
+            if shouldPlay && currentVolume > 0.01 {
+                // FM with 2:1 ratio — bell/chime character, not metallic
+                let modFreq = carrierFreq * 2.0
+                let mod = currentModIndex * sinf(2 * .pi * modPhase)
+                modPhase += modFreq / sr
+                if modPhase >= 1.0 { modPhase -= 1.0 }
 
-            let carrier = sinf(2 * .pi * carrierPhase + mod)
-            carrierPhase += carrierFreq / sr
-            if carrierPhase >= 1.0 { carrierPhase -= 1.0 }
+                let carrier = sinf(2 * .pi * carrierPhase + mod)
+                carrierPhase += carrierFreq / sr
+                if carrierPhase >= 1.0 { carrierPhase -= 1.0 }
 
-            let raw = carrier * pulse * currentVolume
-            lpState = lpAlpha * raw + (1 - lpAlpha) * lpState
+                sample = carrier * currentVolume
+            }
+
+            // LP filter
+            lpState = lpAlpha * sample + (1 - lpAlpha) * lpState
             buffer[i] = lpState
         }
     }
@@ -558,7 +579,7 @@ final class SpatialAudioEngine: ObservableObject {
         for pi in 0..<poolSize where !used.contains(pi) {
             poolVoices[pi].targetVolume    = 0
             poolVoices[pi].targetModIndex  = 0.15
-            poolVoices[pi].targetPulseRate = 0.6
+            poolVoices[pi].targetBeepInterval = 2.0  // Default to slow beeps when silencing
             poolAssignment[pi] = nil
         }
 
@@ -569,7 +590,7 @@ final class SpatialAudioEngine: ObservableObject {
 
             poolVoices[pi].targetVolume    = obstacleVolume(obs.depth)
             poolVoices[pi].targetModIndex  = obstacleModIndex(obs.depth)
-            poolVoices[pi].targetPulseRate = obstaclePulseRate(depth: obs.depth, velocity: obs.velocity)
+            poolVoices[pi].targetBeepInterval = obstacleBeepInterval(obs.depth)
 
             let pos = bearingToAudioPosition(bearing: obs.bearing, depth: obs.depth)
             poolNodes[pi].position = pos
@@ -613,10 +634,19 @@ final class SpatialAudioEngine: ObservableObject {
         return 0.10 + t * 0.35
     }
 
-    private func obstaclePulseRate(depth d: Float, velocity v: Float) -> Float {
-        let t = max(0, min(1, d))
-        let base = 0.4 + 2.1 * powf(t, 1.5)
-        return min(3.0, base + max(0, v) * 0.5)
+    private func obstacleBeepInterval(_ d: Float) -> Float {
+        if d < 0.3 {
+            // Far away: slow beeps (2.0s interval)
+            return 2.0
+        } else if d < 0.7 {
+            // Medium distance: faster beeps (0.5s to 2.0s)
+            let t = (d - 0.3) / 0.4  // 0 to 1 over this range
+            return 2.0 - t * 1.5     // 2.0s down to 0.5s
+        } else {
+            // Close: very fast beeps or continuous (0.1s to continuous)
+            let t = (d - 0.7) / 0.3  // 0 to 1 over this range
+            return 0.5 - t * 0.4     // 0.5s down to 0.1s (continuous when < 0.05s)
+        }
     }
 
     // MARK: - Path beacon
