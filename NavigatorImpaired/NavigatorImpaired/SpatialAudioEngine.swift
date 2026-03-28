@@ -93,7 +93,7 @@ final class ChordBeaconVoice {
 
     private let sr: Float
     private var currentVolume: Float = 0
-    private let slewRate: Float = 0.0006
+    private let slewRate: Float = 0.0015
 
     // Chord: C5, E5, G5 — each with a detuned pair for chorus
     private let baseFreqs: [Float] = [523.25, 659.25, 783.99]
@@ -278,7 +278,7 @@ final class SpatialAudioEngine: ObservableObject {
     private var beaconConfEMA:      Float = 0
     private var beaconAzimuthEMA:   Float = 0.5
     private var beaconSustainCount: Int   = 0
-    private let beaconRequiredFrames      = 18
+    private let beaconRequiredFrames      = 6
 
     // MARK: - Session observers
 
@@ -623,8 +623,8 @@ final class SpatialAudioEngine: ObservableObject {
 
     private func applyBeacon(_ paths: [ClearPath]) {
         guard let best = paths.first, best.confidence > 0.15 else {
-            beaconSustainCount = max(0, beaconSustainCount - 2)
-            beaconConfEMA *= 0.94
+            beaconSustainCount = max(0, beaconSustainCount - 3)
+            beaconConfEMA *= 0.82
             beaconSustainProgress = Float(beaconSustainCount) / Float(beaconRequiredFrames)
             beaconVoice.targetVolume = 0
             activePath = nil
@@ -635,9 +635,9 @@ final class SpatialAudioEngine: ObservableObject {
             beaconSustainCount = 0
         }
 
-        let alpha: Float = best.confidence > beaconConfEMA ? 0.12 : 0.06
+        let alpha: Float = best.confidence > beaconConfEMA ? 0.30 : 0.15
         beaconConfEMA    += alpha * (best.confidence      - beaconConfEMA)
-        beaconAzimuthEMA += 0.08  * (best.azimuthFraction - beaconAzimuthEMA)
+        beaconAzimuthEMA += 0.20  * (best.azimuthFraction - beaconAzimuthEMA)
 
         beaconSustainCount = min(beaconSustainCount + 1, beaconRequiredFrames + 1)
         beaconSustainProgress = min(1, Float(beaconSustainCount) / Float(beaconRequiredFrames))
