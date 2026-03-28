@@ -57,8 +57,9 @@ final class PathFinder {
     /// Vertical sample step (every Nth pixel row in the band).
     private static let ySampleStep = 6
     /// Depth below this is "clear" — no close obstacle.
-    /// 0.45 lets far walls (doorways, corridors) count as walkable.
-    static let clearThreshold: Float = 0.45
+    /// 0.38 balances: far walls through doorways pass, but a door/wall
+    /// within arm's reach (depth ~0.40+) is correctly blocked.
+    static let clearThreshold: Float = 0.38
     /// A gap narrower than this fraction of frame width is ignored.
     private static let minGapFraction: Float = 0.15
     /// Temporal EMA alpha: higher = more responsive, lower = more stable.
@@ -173,11 +174,12 @@ final class PathFinder {
         // Moderate gradient anywhere → floor
         if diff > 0.07 { return true }
 
-        // Flat region in lower 45% of frame → ground plane
-        if abs(diff) < 0.035 && yFrac > 0.55 { return true }
+        // Flat + low-depth region in bottom third → ground plane
+        // (walls are also flat but read higher depth, so require low depth)
+        if abs(diff) < 0.035 && yFrac > 0.62 && curr < 0.40 { return true }
 
-        // Very high depth (close) in bottom quarter → almost certainly floor
-        if curr > 0.60 && yFrac > 0.65 { return true }
+        // Very high depth in bottom quarter with downward gradient → floor
+        if curr > 0.60 && yFrac > 0.70 && diff > 0.01 { return true }
 
         return false
     }
