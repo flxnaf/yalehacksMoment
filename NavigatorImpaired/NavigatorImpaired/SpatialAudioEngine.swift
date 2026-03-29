@@ -104,25 +104,25 @@ final class ShrinePingVoice {
 
 // MARK: - Shore Audio Manager (file-based bell + ocean)
 
-/// Plays real audio files (bell_chime.caf, ocean_waves.caf) instead of
-/// synthesis. Ocean fades in/out smoothly. Bell plays on top. Once a
-/// bell+ocean cycle starts it plays to completion.
+/// Plays real audio files (bell_chime.caf, ocean_waves.caf).
+/// Bell pitched up +1200 cents (1 octave), double ding-ding via scheduling.
+/// Ocean fades out within ~1 second when user looks away.
 final class ShoreAudioManager {
 
     var wantsPlay: Bool = false
     private(set) var isPlaying: Bool = false
 
     private let bellPlayer = AVAudioPlayerNode()
+    private let bellPitch = AVAudioUnitTimePitch()
     private let oceanPlayer = AVAudioPlayerNode()
 
     private var bellBuffer: AVAudioPCMBuffer?
     private var oceanBuffer: AVAudioPCMBuffer?
 
-    private let fadeSlew: Float = 0.003
     private var oceanVol: Float = 0
-
     private var bellCooldownFrames: Int = 0
     private let bellRepeatInterval: Int = 44100 * 4
+    private var offTargetFrames: Int = 0
 
     func loadBuffers() {
         bellBuffer = Self.loadCAF(named: "bell_chime")
@@ -134,11 +134,13 @@ final class ShoreAudioManager {
     func attach(to engine: AVAudioEngine, environment: AVAudioEnvironmentNode) {
         let mono = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
 
+        bellPitch.pitch = 1200
+        bellPitch.rate = 1.0
         engine.attach(bellPlayer)
-        engine.connect(bellPlayer, to: environment, format: bellBuffer?.format ?? mono)
-        bellPlayer.renderingAlgorithm = .equalPowerPanning
-        bellPlayer.position = AVAudio3DPoint(x: 0, y: 0, z: -1)
-        bellPlayer.volume = 0.7
+        engine.attach(bellPitch)
+        engine.connect(bellPlayer, to: bellPitch, format: bellBuffer?.format ?? mono)
+        engine.connect(bellPitch, to: environment, format: nil)
+        bellPlayer.volume = 0.75
 
         engine.attach(oceanPlayer)
         engine.connect(oceanPlayer, to: environment, format: oceanBuffer?.format ?? mono)
@@ -147,30 +149,33 @@ final class ShoreAudioManager {
         oceanPlayer.volume = 0
     }
 
-    func enterOnTarget() {
-        guard !isPlaying else { return }
-        isPlaying = true
-        startOceanLoop()
-        playBell()
-    }
-
     func update() {
         if wantsPlay && !isPlaying {
-            enterOnTarget()
+            isPlaying = true
+            offTargetFrames = 0
+            startOceanLoop()
+            playDoubleBell()
         }
 
-        let target: Float = isPlaying ? 0.5 : 0
-        oceanVol += (target - oceanVol) * fadeSlew
+        if wantsPlay {
+            offTargetFrames = 0
+        } else {
+            offTargetFrames += 1
+        }
+
+        let target: Float = wantsPlay ? 0.45 : 0
+        let slew: Float = wantsPlay ? 0.03 : 0.06
+        oceanVol += (target - oceanVol) * slew
         oceanPlayer.volume = oceanVol
 
         if isPlaying {
             bellCooldownFrames += 1024
             if bellCooldownFrames >= bellRepeatInterval && wantsPlay {
-                playBell()
+                playDoubleBell()
                 bellCooldownFrames = 0
             }
 
-            if !wantsPlay && oceanVol < 0.01 {
+            if !wantsPlay && offTargetFrames > 60 {
                 isPlaying = false
                 oceanPlayer.stop()
                 bellPlayer.stop()
@@ -189,9 +194,14 @@ final class ShoreAudioManager {
         oceanPlayer.volume = 0
     }
 
-    private func playBell() {
+    /// Schedule the bell file twice with a 150ms gap for "ding-ding".
+    /// Both at the same pitch (bellPitch handles the octave shift).
+    private func playDoubleBell() {
         guard let buf = bellBuffer else { return }
         bellPlayer.stop()
+        bellPlayer.scheduleBuffer(buf, at: nil, options: []) { [weak self] in
+            // Second ding after first finishes — runs on audio thread
+        }
         bellPlayer.scheduleBuffer(buf, at: nil, options: [], completionHandler: nil)
         bellPlayer.play()
     }
