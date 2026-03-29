@@ -104,142 +104,155 @@ final class ShrinePingVoice {
 
 // MARK: - Shore Ambient Voice (on-target reward sound)
 
-/// Double bell chime ("ding-ding") over rolling ocean surf. Plays one
-/// full cycle when the user looks on-target. If they stay on-target the
-/// cycle repeats. If they look away mid-cycle, it fades out. Looking
-/// back always restarts from the beginning.
+/// High crystal double-chime over ocean wave wash. Once triggered by
+/// entering the on-target zone, the full cycle (~3.5s) always plays to
+/// completion — even if the user briefly looks away. If still on-target
+/// when the cycle ends, it repeats. The voice only truly silences after
+/// the current cycle finishes AND the user has left the zone.
 final class ShoreAmbientVoice {
 
-    /// Set > 0 to play, 0 to fade out. When transitioning 0→>0, the
-    /// voice resets to the start of a fresh cycle.
-    var targetVolume: Float = 0 {
-        didSet {
-            if oldValue < 0.001 && targetVolume > 0.001 {
-                resetCycle()
-            }
-        }
-    }
+    /// true = user is in the on-target zone right now.
+    var wantsPlay: Bool = false
+
+    /// Whether a cycle is currently sounding (read by engine to mute shrine).
+    private(set) var isPlaying: Bool = false
 
     private let sr: Float
-    private var currentVolume: Float = 0
-    private let volumeSlew: Float = 0.006
+    private var masterVol: Float = 0
+    private let volSlew: Float = 0.004
 
-    // MARK: Double-bell state
+    // MARK: Bell (crystal chime, high register)
 
-    private enum BellState { case idle, ding1, gap, ding2, tail }
-    private var bellState: BellState = .idle
-    private var bellSamplesInState: Int = 0
-    private var bellEnvelope: Float = 0
-    private var bellPhases: [Float] = [0, 0, 0, 0, 0]
+    private enum ChimeState { case idle, ding1, gap, ding2, ring }
+    private var chimeState: ChimeState = .idle
+    private var chimeSamples: Int = 0
+    private var chimeEnv: Float = 0
+    private var chimePhases: [Float] = [0, 0, 0, 0]
 
-    private let ding1Duration: Int
-    private let gapDuration: Int
-    private let ding2Duration: Int
-    private let cycleLength: Int
+    // C7, E7, G#7, C8 — bright crystal / wind-chime partials
+    private let chimeFreqs: [Float] = [2093.0, 2637.0, 3322.4, 4186.0]
+    private let chimeAmps: [Float]  = [1.0,    0.6,    0.35,   0.2]
 
-    private var cyclePosition: Int = 0
+    private let ding1Len: Int
+    private let gapLen: Int
+    private let ding2Len: Int
+    private let cycleLen: Int
+    private var cyclePos: Int = 0
 
-    private let bellFreqs: [Float]  = [880, 1760, 2217.46, 3135.96, 4434.92]
-    private let bellAmps: [Float]   = [1.0, 0.45, 0.3, 0.12, 0.06]
-    private let ding1Pitch: Float = 1.0
-    private let ding2Pitch: Float = 1.26
-
-    // MARK: Ocean surf state
+    // MARK: Ocean wave wash (3 bands for realistic surf)
 
     private var noiseState: UInt32 = 0xDEADBEEF
+
+    private var lpLo: Float = 0   // low rumble  ~100 Hz
+    private var lpMid: Float = 0  // mid wash    ~400 Hz
+    private var lpHi: Float = 0   // high hiss   ~2 kHz
+    private var bpMid: Float = 0
+
     private var wavePhase: Float = 0
-    private let waveSpeed: Float = 0.14
-    private var lpA: Float = 0
-    private var lpB: Float = 0
+    private let waveHz: Float = 0.13
 
     init(sampleRate: Float) {
         sr = sampleRate
-        ding1Duration = Int(0.09 * sampleRate)
-        gapDuration   = Int(0.14 * sampleRate)
-        ding2Duration = Int(0.09 * sampleRate)
-        cycleLength   = Int(3.2 * sampleRate)
+        ding1Len = Int(0.07 * sampleRate)
+        gapLen   = Int(0.11 * sampleRate)
+        ding2Len = Int(0.07 * sampleRate)
+        cycleLen = Int(3.5 * sampleRate)
     }
 
-    private func resetCycle() {
-        bellState = .ding1
-        bellSamplesInState = 0
-        bellEnvelope = 1.0
-        cyclePosition = 0
-        for j in 0..<bellPhases.count { bellPhases[j] = 0 }
-        wavePhase = 0
-        lpA = 0
-        lpB = 0
+    private func startCycle() {
+        chimeState = .ding1
+        chimeSamples = 0
+        chimeEnv = 1.0
+        cyclePos = 0
+        for j in 0..<chimePhases.count { chimePhases[j] = 0 }
+        isPlaying = true
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
-        let tv = targetVolume
         for i in 0..<frameCount {
-            currentVolume += (tv - currentVolume) * volumeSlew
+            let target: Float = isPlaying ? 0.65 : 0
+            masterVol += (target - masterVol) * volSlew
+
+            // Start a new cycle if wanted and not currently playing
+            if !isPlaying && wantsPlay {
+                startCycle()
+            }
 
             var sample: Float = 0
 
-            // --- Ocean surf ---
-            let noise = nextNoise()
-            lpA += (noise - lpA) * 0.035
-            lpB += (lpA - lpB) * 0.035
+            // --- Ocean wave wash (3-band filtered noise) ---
+            if isPlaying {
+                let n = nextNoise()
+                lpLo  += (n - lpLo) * 0.015          // ~100 Hz LP
+                lpMid += (n - lpMid) * 0.06           // ~420 Hz LP
+                bpMid = lpMid - lpLo                   // bandpass ~100-420
+                lpHi  += (n - lpHi) * 0.18            // ~1.3 kHz LP
+                let hiPass = lpHi - lpMid              // bandpass ~420-1300
 
-            wavePhase += waveSpeed / sr
-            if wavePhase >= 1.0 { wavePhase -= 1.0 }
-            let crest  = sinf(2 * .pi * wavePhase) * 0.5 + 0.5
-            let swell  = sinf(2 * .pi * wavePhase * 0.31 + 0.8) * 0.5 + 0.5
-            let waveAmp = crest * 0.7 + swell * 0.3
-            sample += lpB * waveAmp * 0.45
+                wavePhase += waveHz / sr
+                if wavePhase >= 1.0 { wavePhase -= 1.0 }
 
-            // --- Double bell ---
-            bellSamplesInState += 1
-            cyclePosition += 1
+                let phase2 = wavePhase * 0.41 + 0.6
+                let crest  = powf(sinf(.pi * wavePhase), 2)          // sharp crest
+                let foam   = powf(sinf(.pi * phase2), 2) * 0.5       // secondary foam
+                let env    = min(crest + foam, 1.0)
 
-            switch bellState {
-            case .idle:
-                if cyclePosition >= cycleLength && currentVolume > 0.01 {
-                    resetCycle()
-                }
-            case .ding1:
-                let pitchBend = 1.0 + 0.03 * max(0, 1 - Float(bellSamplesInState) / Float(ding1Duration))
-                sample += renderBell(pitchMult: ding1Pitch * pitchBend)
-                bellEnvelope *= expf(-4.0 / sr)
-                if bellSamplesInState >= ding1Duration {
-                    bellState = .gap; bellSamplesInState = 0
-                }
-            case .gap:
-                bellEnvelope *= 0.97
-                if bellSamplesInState >= gapDuration {
-                    bellState = .ding2; bellSamplesInState = 0
-                    bellEnvelope = 0.9
-                    for j in 0..<bellPhases.count { bellPhases[j] = 0 }
-                }
-            case .ding2:
-                let pitchBend = 1.0 + 0.02 * max(0, 1 - Float(bellSamplesInState) / Float(ding2Duration))
-                sample += renderBell(pitchMult: ding2Pitch * pitchBend)
-                bellEnvelope *= expf(-4.5 / sr)
-                if bellSamplesInState >= ding2Duration {
-                    bellState = .tail; bellSamplesInState = 0
-                }
-            case .tail:
-                sample += renderBell(pitchMult: ding2Pitch) * 0.25
-                bellEnvelope *= expf(-6.0 / sr)
-                if bellEnvelope < 0.001 {
-                    bellState = .idle; bellEnvelope = 0
+                let wave = lpLo * 0.3 + bpMid * 0.5 + hiPass * 0.4
+                sample += wave * env * 0.7
+
+                // --- Double chime ---
+                chimeSamples += 1
+                cyclePos += 1
+
+                switch chimeState {
+                case .idle:
+                    if cyclePos >= cycleLen {
+                        if wantsPlay {
+                            startCycle()
+                        } else {
+                            isPlaying = false
+                        }
+                    }
+                case .ding1:
+                    sample += renderChime(pitchMult: 1.0)
+                    chimeEnv *= expf(-5.0 / sr)
+                    if chimeSamples >= ding1Len {
+                        chimeState = .gap; chimeSamples = 0
+                    }
+                case .gap:
+                    chimeEnv *= 0.96
+                    if chimeSamples >= gapLen {
+                        chimeState = .ding2; chimeSamples = 0
+                        chimeEnv = 0.85
+                        for j in 0..<chimePhases.count { chimePhases[j] = 0 }
+                    }
+                case .ding2:
+                    sample += renderChime(pitchMult: 1.19)   // major 3rd up
+                    chimeEnv *= expf(-5.5 / sr)
+                    if chimeSamples >= ding2Len {
+                        chimeState = .ring; chimeSamples = 0
+                    }
+                case .ring:
+                    sample += renderChime(pitchMult: 1.19) * 0.2
+                    chimeEnv *= expf(-8.0 / sr)
+                    if chimeEnv < 0.001 {
+                        chimeState = .idle; chimeEnv = 0
+                    }
                 }
             }
 
-            buffer[i] = sample * currentVolume
+            buffer[i] = sample * masterVol
         }
     }
 
-    private func renderBell(pitchMult: Float) -> Float {
+    private func renderChime(pitchMult: Float) -> Float {
         var out: Float = 0
-        for j in 0..<bellFreqs.count {
-            out += sinf(2 * .pi * bellPhases[j]) * bellAmps[j]
-            bellPhases[j] += (bellFreqs[j] * pitchMult) / sr
-            if bellPhases[j] >= 1.0 { bellPhases[j] -= 1.0 }
+        for j in 0..<chimeFreqs.count {
+            out += sinf(2 * .pi * chimePhases[j]) * chimeAmps[j]
+            chimePhases[j] += (chimeFreqs[j] * pitchMult) / sr
+            if chimePhases[j] >= 1.0 { chimePhases[j] -= 1.0 }
         }
-        return out * bellEnvelope * 0.5
+        return out * chimeEnv * 0.45
     }
 
     private func nextNoise() -> Float {
@@ -415,7 +428,7 @@ final class SpatialAudioEngine: ObservableObject {
         beaconActive = false
         beaconCoordinate = nil
         shrinePing.targetVolume = 0
-        shoreAmbient.targetVolume = 0
+        shoreAmbient.wantsPlay = false
         isOnTarget = false
         beaconBearingDegrees = 0
         beaconDistanceMeters = 0
@@ -525,7 +538,7 @@ final class SpatialAudioEngine: ObservableObject {
     private func updateShrineNodePosition() {
         guard beaconActive else {
             relativeBeaconAngle = 0
-            shoreAmbient.targetVolume = 0
+            shoreAmbient.wantsPlay = false
             isOnTarget = false
             return
         }
@@ -573,7 +586,7 @@ final class SpatialAudioEngine: ObservableObject {
         relativeBeaconAngle = Self.circularEMA(
             current: relativeBeaconAngle,
             target: rawRelative,
-            alpha: 0.15
+            alpha: 0.10
         )
 
         let rad = relativeBeaconAngle * Float.pi / 180
@@ -583,14 +596,16 @@ final class SpatialAudioEngine: ObservableObject {
 
         shrineNode?.position = AVAudio3DPoint(x: x, y: 0, z: z)
 
-        // On-target: within ±8° → play shore ambient, mute shrine ping
-        let onTarget = abs(relativeBeaconAngle) < 8
-        isOnTarget = onTarget
-        if onTarget {
-            shoreAmbient.targetVolume = 0.6
+        // On-target zone: ±20° triggers the shore chime. Once triggered
+        // the full cycle plays out even if the user briefly drifts outside.
+        let inZone = abs(relativeBeaconAngle) < 20
+        shoreAmbient.wantsPlay = inZone
+        let shoreActive = shoreAmbient.isPlaying || inZone
+        isOnTarget = shoreActive
+
+        if shoreActive {
             shrinePing.targetVolume = 0
         } else {
-            shoreAmbient.targetVolume = 0
             shrinePing.targetVolume = 0.70
         }
 
@@ -703,7 +718,7 @@ final class SpatialAudioEngine: ObservableObject {
 
     private func stopEngine() {
         shrinePing.targetVolume = 0
-        shoreAmbient.targetVolume = 0
+        shoreAmbient.wantsPlay = false
         isOnTarget = false
         beaconActive = false
         beaconCoordinate = nil
@@ -798,12 +813,13 @@ final class SpatialAudioEngine: ObservableObject {
             var heading = Float(-att.yaw * 180.0 / .pi)
             heading = Self.wrapAngle360(heading)
 
-            // Blend with a small alpha for frame-to-frame smoothness.
-            // Apple's fusion is already stable, so we just remove micro-jitter.
+            // Smooth heavily to prevent the ping from jittering.
+            // Alpha 0.15 ≈ 10-frame lag (~170ms) which feels responsive
+            // for head turns but kills magnetometer micro-noise.
             self.fusedHeadingDegrees = Self.circularEMA(
                 current: self.fusedHeadingDegrees,
                 target: heading,
-                alpha: 0.4
+                alpha: 0.15
             )
             self.fusedHeadingDegrees = Self.wrapAngle360(self.fusedHeadingDegrees)
 
