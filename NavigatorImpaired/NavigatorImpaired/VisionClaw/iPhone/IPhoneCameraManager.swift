@@ -2,7 +2,7 @@ import ARKit
 import UIKit
 
 class IPhoneCameraManager: NSObject {
-  private let arSession = ARSession()
+  let arSession = ARSession()
   private let context = CIContext()
   private var isRunning = false
 
@@ -32,7 +32,6 @@ class IPhoneCameraManager: NSObject {
     NSLog("[iPhoneCamera] ARSession paused")
   }
 
-  /// Expose the latest AR frame for waypoint placement.
   var currentFrame: ARFrame? {
     arSession.currentFrame
   }
@@ -63,5 +62,28 @@ extension IPhoneCameraManager: ARSessionDelegate {
 
     onFrameCaptured?(image)
     onARFrameUpdate?(frame)
+  }
+
+  func session(_ session: ARSession, didFailWithError error: Error) {
+    NSLog("[iPhoneCamera] ARSession failed: \(error.localizedDescription)")
+  }
+
+  func sessionWasInterrupted(_ session: ARSession) {
+    NSLog("[iPhoneCamera] ARSession interrupted")
+  }
+
+  func sessionInterruptionEnded(_ session: ARSession) {
+    NSLog("[iPhoneCamera] ARSession interruption ended — relocating")
+  }
+
+  func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+    switch camera.trackingState {
+    case .notAvailable:
+      NSLog("[iPhoneCamera] Tracking: NOT AVAILABLE")
+    case .limited(let reason):
+      NSLog("[iPhoneCamera] Tracking: LIMITED (\(reason))")
+    case .normal:
+      NSLog("[iPhoneCamera] Tracking: NORMAL")
+    }
   }
 }

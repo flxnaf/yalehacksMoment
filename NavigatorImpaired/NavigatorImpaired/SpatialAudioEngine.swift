@@ -292,7 +292,19 @@ final class SpatialAudioEngine: ObservableObject {
 
     private let sampleRate: Double = 44100
 
-    // MARK: - ARKit waypoint tracking
+    // MARK: - ARKit waypoint tracking (ARAnchor-based, like Google Maps Live View)
+
+    /// The ARSession from IPhoneCameraManager (set when iPhone camera starts).
+    /// Used to add/remove the beacon ARAnchor.
+    var arSession: ARSession?
+
+    /// The ARAnchor representing the beacon's world position.
+    /// ARKit actively maintains this — correcting for map refinement and relocalization.
+    private var beaconAnchor: ARAnchor?
+
+    /// When the beacon is requested before ARKit tracking is ready,
+    /// store it here and place the anchor once tracking becomes .normal.
+    private var pendingBeacon: (degrees: Float, distance: Float)?
 
     /// GPS coordinate of the beacon (for outdoor distance fallback).
     private var beaconCoordinate: CLLocationCoordinate2D?
@@ -300,11 +312,11 @@ final class SpatialAudioEngine: ObservableObject {
     /// Threshold distance to auto-clear the beacon (meters).
     private var arrivalThresholdMeters: Float = 3.0
 
-    /// The waypoint's position in ARKit world space (set when beacon is placed).
-    private var waypointWorldPosition: simd_float3?
-
     /// The latest ARFrame camera transform, updated every frame (~60 fps).
     private var latestCameraTransform: simd_float4x4?
+
+    /// Whether ARKit tracking was .normal on the last frame.
+    private var lastTrackingNormal: Bool = false
 
     // MARK: - Observers
 
@@ -354,22 +366,19 @@ final class SpatialAudioEngine: ObservableObject {
         beaconDistanceMeters = distanceMeters
         arrivalThresholdMeters = max(2.0, distanceMeters * 0.2)
 
-        // Compute 3D world position using the current ARKit camera transform.
-        if let cam = latestCameraTransform {
-            let camPos = simd_float3(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
-            let forward = -simd_normalize(simd_float3(cam.columns.2.x, 0, cam.columns.2.z))
-            let bearingRad = degrees * .pi / 180
-            let cosB = cos(bearingRad), sinB = sin(bearingRad)
-            let direction = simd_float3(
-                forward.x * cosB + forward.z * sinB,
-                0,
-                -forward.x * sinB + forward.z * cosB
-            )
-            waypointWorldPosition = camPos + simd_normalize(direction) * distanceMeters
-            print("[SpatialAudio] Beacon placed in AR world: \(waypointWorldPosition!) (\(distanceMeters)m, \(degrees)° relative)")
+        // Remove any existing anchor
+        if let old = beaconAnchor {
+            arSession?.remove(anchor: old)
+            beaconAnchor = nil
+        }
+
+        // Place ARAnchor if tracking is ready, otherwise defer
+        if lastTrackingNormal, let cam = latestCameraTransform, let session = arSession {
+            placeAnchor(degrees: degrees, distance: distanceMeters, camera: cam, session: session)
+            pendingBeacon = nil
         } else {
-            waypointWorldPosition = nil
-            print("[SpatialAudio] No AR frame yet — beacon placed as angle-only fallback")
+            pendingBeacon = (degrees, distanceMeters)
+            print("[SpatialAudio] Tracking not ready — beacon deferred (pending)")
         }
 
         // GPS coordinate as outdoor fallback
@@ -390,10 +399,36 @@ final class SpatialAudioEngine: ObservableObject {
         updateShrineNodePosition()
     }
 
+    /// Compute a 3D world position from bearing + distance relative to the camera,
+    /// create an ARAnchor, and add it to the session.
+    private func placeAnchor(degrees: Float, distance: Float, camera cam: simd_float4x4, session: ARSession) {
+        let camPos = simd_float3(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
+        let forward = -simd_normalize(simd_float3(cam.columns.2.x, 0, cam.columns.2.z))
+        let bearingRad = degrees * .pi / 180
+        let cosB = cos(bearingRad), sinB = sin(bearingRad)
+        let direction = simd_normalize(simd_float3(
+            forward.x * cosB + forward.z * sinB,
+            0,
+            -forward.x * sinB + forward.z * cosB
+        ))
+        let worldPos = camPos + direction * distance
+
+        var anchorTransform = matrix_identity_float4x4
+        anchorTransform.columns.3 = simd_float4(worldPos.x, worldPos.y, worldPos.z, 1)
+        let anchor = ARAnchor(name: "beacon", transform: anchorTransform)
+        session.add(anchor: anchor)
+        beaconAnchor = anchor
+        print("[SpatialAudio] ARAnchor placed at \(worldPos) (\(distance)m, \(degrees)° relative)")
+    }
+
     func clearBeacon() {
         beaconActive = false
         beaconCoordinate = nil
-        waypointWorldPosition = nil
+        pendingBeacon = nil
+        if let anchor = beaconAnchor {
+            arSession?.remove(anchor: anchor)
+            beaconAnchor = nil
+        }
         shrinePing.targetVolume = 0
         shoreAudio.stop()
         isOnTarget = false
@@ -503,9 +538,20 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     /// Called every AR frame (~60 fps) with the latest camera transform.
-    /// Projects the 3D waypoint into camera-local space for direction + distance.
+    /// Checks tracking state, places deferred beacons, and projects the
+    /// ARAnchor into camera-local space for direction + distance.
     func updateFromARFrame(_ frame: ARFrame) {
-        latestCameraTransform = frame.camera.transform
+        let cam = frame.camera
+        latestCameraTransform = cam.transform
+
+        let trackingNormal = (cam.trackingState == .normal)
+        lastTrackingNormal = trackingNormal
+
+        // Place deferred beacon now that tracking is ready
+        if trackingNormal, let pending = pendingBeacon, let session = arSession {
+            placeAnchor(degrees: pending.degrees, distance: pending.distance, camera: cam.transform, session: session)
+            pendingBeacon = nil
+        }
 
         // Update compass heading for UI (cosmetic)
         let compassHeading = Float(LocationManager.shared.currentHeading)
@@ -518,10 +564,14 @@ final class SpatialAudioEngine: ObservableObject {
             fusedHeadingDegrees = Self.wrapAngle360(fusedHeadingDegrees)
         }
 
-        updateShrineNodePosition()
+        // Only update waypoint direction when tracking is good.
+        // When tracking is limited/lost, hold the last known angle.
+        if trackingNormal {
+            updateShrineNodePosition(cameraTransform: cam.transform, anchors: frame.anchors)
+        }
     }
 
-    private func updateShrineNodePosition() {
+    private func updateShrineNodePosition(cameraTransform cam: simd_float4x4, anchors: [ARAnchor]) {
         guard beaconActive else {
             relativeBeaconAngle = 0
             shoreAudio.wantsPlay = false
@@ -530,19 +580,31 @@ final class SpatialAudioEngine: ObservableObject {
             return
         }
 
-        // --- ARKit-based direction + distance (primary) ---
-        if let wp = waypointWorldPosition, let cam = latestCameraTransform {
+        // --- ARAnchor-based direction + distance (primary) ---
+        // Look up the beacon anchor from the frame's anchor list.
+        // ARKit may have updated its transform (map refinement, relocalization).
+        let anchorWorldPos: simd_float3?
+        if let anchor = beaconAnchor,
+           let updated = anchors.first(where: { $0.identifier == anchor.identifier }) {
+            beaconAnchor = updated
+            let t = updated.transform.columns.3
+            anchorWorldPos = simd_float3(t.x, t.y, t.z)
+        } else {
+            anchorWorldPos = nil
+        }
+
+        if let wp = anchorWorldPos {
             let localPos = cam.inverse * simd_float4(wp.x, wp.y, wp.z, 1)
             let rawAngle = atan2(localPos.x, -localPos.z) * 180 / .pi
             relativeBeaconAngle = Self.circularEMA(
                 current: relativeBeaconAngle,
                 target: Self.wrapAngle(rawAngle),
-                alpha: 0.4
+                alpha: 0.5
             )
 
             let camPos = simd_float3(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
             let dist = simd_length(wp - camPos)
-            beaconDistanceMeters += (dist - beaconDistanceMeters) * 0.15
+            beaconDistanceMeters += (dist - beaconDistanceMeters) * 0.2
 
             if beaconDistanceMeters < arrivalThresholdMeters {
                 clearBeacon()
@@ -551,7 +613,7 @@ final class SpatialAudioEngine: ObservableObject {
             }
         } else if let beaconCoord = beaconCoordinate,
                   let userCoord = LocationManager.shared.currentCoordinate {
-            // GPS fallback (no AR frame yet, or outdoors)
+            // GPS fallback (anchor not yet placed, or outdoors)
             let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
             let beaconLoc = CLLocation(latitude: beaconCoord.latitude, longitude: beaconCoord.longitude)
             let rawDist = Float(userLoc.distance(from: beaconLoc))
@@ -575,7 +637,8 @@ final class SpatialAudioEngine: ObservableObject {
 
         posLogCount += 1
         if posLogCount % 120 == 1 {
-            print("[ShrinePos] ARKit heading=\(String(format: "%.0f", fusedHeadingDegrees))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m zone=\(inZone) shore=\(shoreAudio.isPlaying)")
+            let anchorStatus = beaconAnchor != nil ? "anchored" : (pendingBeacon != nil ? "pending" : "none")
+            print("[ShrinePos] ARKit rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m zone=\(inZone) anchor=\(anchorStatus)")
         }
     }
 
@@ -675,8 +738,13 @@ final class SpatialAudioEngine: ObservableObject {
         isOnTarget = false
         beaconActive = false
         beaconCoordinate = nil
-        waypointWorldPosition = nil
+        pendingBeacon = nil
+        if let anchor = beaconAnchor {
+            arSession?.remove(anchor: anchor)
+            beaconAnchor = nil
+        }
         latestCameraTransform = nil
+        lastTrackingNormal = false
         activePath = nil
         rawPaths = []
         depthProfile = []

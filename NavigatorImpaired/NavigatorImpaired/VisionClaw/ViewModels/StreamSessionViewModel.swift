@@ -543,6 +543,7 @@ class StreamSessionViewModel: ObservableObject {
         self?.audioEngine.updateFromARFrame(frame)
       }
     }
+    audioEngine.arSession = camera.arSession
     camera.start()
     iPhoneCameraManager = camera
     streamingStatus = .streaming
@@ -557,6 +558,7 @@ class StreamSessionViewModel: ObservableObject {
     hasReceivedFirstFrame = false
     streamingStatus = .stopped
     streamingMode = .glasses
+    audioEngine.arSession = nil
     audioEngine.isEnabled = false
     audioEngine.setGlassesMode(true)
     NSLog("[Stream] iPhone camera mode stopped")
