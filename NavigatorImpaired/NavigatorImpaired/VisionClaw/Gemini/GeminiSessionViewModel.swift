@@ -207,4 +207,22 @@ class GeminiSessionViewModel: ObservableObject {
     geminiService.sendVideoFrame(image: image)
   }
 
+  // MARK: - Proactive obstacle scanning
+
+  /// Sends a text turn to Gemini asking it to describe what is directly ahead.
+  /// Only fires when Gemini is connected, not currently speaking, and ready.
+  /// The depth-urgency gate lives in `StreamSessionViewModel` — call this only
+  /// when something is actually close.
+  func sendObstacleScan() {
+    guard isGeminiActive, connectionState == .ready, !isModelSpeaking else { return }
+    let msg = """
+      [OBSTACLE SCAN] Look at the camera right now and describe what objects are directly \
+      ahead of me. Name each object, its clock direction (12 o clock is straight ahead, \
+      3 o clock is right, 9 o clock is left), and distance (very close, close, or nearby). \
+      If the path looks clear say Path clear. Reply in 15 words or fewer with no apostrophes.
+      """
+    geminiService.sendTextMessage(msg)
+    NSLog("[Gemini] Obstacle scan triggered")
+  }
+
 }

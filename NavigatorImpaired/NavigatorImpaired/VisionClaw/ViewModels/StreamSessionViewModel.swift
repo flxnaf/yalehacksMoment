@@ -97,6 +97,11 @@ class StreamSessionViewModel: ObservableObject {
   private let obstacleAnalyzer = ObstacleAnalyzer()
   private let verbalCueController = NavigationVerbalCueController()
 
+  /// Tracks when the last proactive obstacle scan was sent to Gemini.
+  private var lastObstacleScanTime: Date = .distantPast
+  /// Seconds between proactive obstacle scans. Shorter when a beacon is active.
+  private var obstacleScanCooldown: TimeInterval { audioEngine.beaconActive ? 5.0 : 8.0 }
+
   // MARK: - Spatial Audio
   let audioEngine = SpatialAudioEngine()
   /// Glasses / phone frame source for fall detection and guardian snapshot (`RayBanCameraManager`).
@@ -272,6 +277,18 @@ class StreamSessionViewModel: ObservableObject {
             heading: self.audioEngine.currentHeading
           )
           self.isInRoom = self.verbalCueController.roomDetector.currentState.inRoom
+
+          // Proactive obstacle scan: fire when something is nearby OR a beacon is
+          // active (user is walking toward a target and needs to know what's in the way).
+          let now = Date()
+          let shouldScan = (obstacle.urgency > 0.25 || self.audioEngine.beaconActive)
+            && now.timeIntervalSince(self.lastObstacleScanTime) >= self.obstacleScanCooldown
+            && !(self.geminiSessionVM?.isModelSpeaking ?? false)
+          if shouldScan {
+            self.lastObstacleScanTime = now
+            self.geminiSessionVM?.sendObstacleScan()
+          }
+
           self.depthLatency.record(ms)
           self.depthLatestMs = ms
           self.depthAvgMs = self.depthLatency.average
