@@ -102,162 +102,118 @@ final class ShrinePingVoice {
     }
 }
 
-// MARK: - Shore Ambient Voice (on-target reward sound)
+// MARK: - Shore Audio Manager (file-based bell + ocean)
 
-/// High crystal double-chime over ocean wave wash. Once triggered by
-/// entering the on-target zone, the full cycle (~3.5s) always plays to
-/// completion — even if the user briefly looks away. If still on-target
-/// when the cycle ends, it repeats. The voice only truly silences after
-/// the current cycle finishes AND the user has left the zone.
-final class ShoreAmbientVoice {
+/// Plays real audio files (bell_chime.caf, ocean_waves.caf) instead of
+/// synthesis. Ocean fades in/out smoothly. Bell plays on top. Once a
+/// bell+ocean cycle starts it plays to completion.
+final class ShoreAudioManager {
 
-    /// true = user is in the on-target zone right now.
     var wantsPlay: Bool = false
-
-    /// Whether a cycle is currently sounding (read by engine to mute shrine).
     private(set) var isPlaying: Bool = false
 
-    private let sr: Float
-    private var masterVol: Float = 0
-    private let volSlew: Float = 0.004
+    private let bellPlayer = AVAudioPlayerNode()
+    private let oceanPlayer = AVAudioPlayerNode()
 
-    // MARK: Bell (crystal chime, high register)
+    private var bellBuffer: AVAudioPCMBuffer?
+    private var oceanBuffer: AVAudioPCMBuffer?
 
-    private enum ChimeState { case idle, ding1, gap, ding2, ring }
-    private var chimeState: ChimeState = .idle
-    private var chimeSamples: Int = 0
-    private var chimeEnv: Float = 0
-    private var chimePhases: [Float] = [0, 0, 0, 0]
+    private let fadeSlew: Float = 0.003
+    private var oceanVol: Float = 0
 
-    // C7, E7, G#7, C8 — bright crystal / wind-chime partials
-    private let chimeFreqs: [Float] = [2093.0, 2637.0, 3322.4, 4186.0]
-    private let chimeAmps: [Float]  = [1.0,    0.6,    0.35,   0.2]
+    private var bellCooldownFrames: Int = 0
+    private let bellRepeatInterval: Int = 44100 * 4
 
-    private let ding1Len: Int
-    private let gapLen: Int
-    private let ding2Len: Int
-    private let cycleLen: Int
-    private var cyclePos: Int = 0
-
-    // MARK: Ocean wave wash (3 bands for realistic surf)
-
-    private var noiseState: UInt32 = 0xDEADBEEF
-
-    private var lpLo: Float = 0   // low rumble  ~100 Hz
-    private var lpMid: Float = 0  // mid wash    ~400 Hz
-    private var lpHi: Float = 0   // high hiss   ~2 kHz
-    private var bpMid: Float = 0
-
-    private var wavePhase: Float = 0
-    private let waveHz: Float = 0.13
-
-    init(sampleRate: Float) {
-        sr = sampleRate
-        ding1Len = Int(0.07 * sampleRate)
-        gapLen   = Int(0.11 * sampleRate)
-        ding2Len = Int(0.07 * sampleRate)
-        cycleLen = Int(3.5 * sampleRate)
+    func loadBuffers() {
+        bellBuffer = Self.loadCAF(named: "bell_chime")
+        oceanBuffer = Self.loadCAF(named: "ocean_waves")
+        if bellBuffer == nil { print("[ShoreAudio] ⚠️ bell_chime.caf not found") }
+        if oceanBuffer == nil { print("[ShoreAudio] ⚠️ ocean_waves.caf not found") }
     }
 
-    private func startCycle() {
-        chimeState = .ding1
-        chimeSamples = 0
-        chimeEnv = 1.0
-        cyclePos = 0
-        for j in 0..<chimePhases.count { chimePhases[j] = 0 }
+    func attach(to engine: AVAudioEngine, environment: AVAudioEnvironmentNode) {
+        let mono = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+
+        engine.attach(bellPlayer)
+        engine.connect(bellPlayer, to: environment, format: bellBuffer?.format ?? mono)
+        bellPlayer.renderingAlgorithm = .equalPowerPanning
+        bellPlayer.position = AVAudio3DPoint(x: 0, y: 0, z: -1)
+        bellPlayer.volume = 0.7
+
+        engine.attach(oceanPlayer)
+        engine.connect(oceanPlayer, to: environment, format: oceanBuffer?.format ?? mono)
+        oceanPlayer.renderingAlgorithm = .equalPowerPanning
+        oceanPlayer.position = AVAudio3DPoint(x: 0, y: 0, z: -1)
+        oceanPlayer.volume = 0
+    }
+
+    func enterOnTarget() {
+        guard !isPlaying else { return }
         isPlaying = true
+        startOceanLoop()
+        playBell()
     }
 
-    func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
-        for i in 0..<frameCount {
-            let target: Float = isPlaying ? 0.65 : 0
-            masterVol += (target - masterVol) * volSlew
+    func update() {
+        if wantsPlay && !isPlaying {
+            enterOnTarget()
+        }
 
-            // Start a new cycle if wanted and not currently playing
-            if !isPlaying && wantsPlay {
-                startCycle()
+        let target: Float = isPlaying ? 0.5 : 0
+        oceanVol += (target - oceanVol) * fadeSlew
+        oceanPlayer.volume = oceanVol
+
+        if isPlaying {
+            bellCooldownFrames += 1024
+            if bellCooldownFrames >= bellRepeatInterval && wantsPlay {
+                playBell()
+                bellCooldownFrames = 0
             }
 
-            var sample: Float = 0
-
-            // --- Ocean wave wash (3-band filtered noise) ---
-            if isPlaying {
-                let n = nextNoise()
-                lpLo  += (n - lpLo) * 0.015          // ~100 Hz LP
-                lpMid += (n - lpMid) * 0.06           // ~420 Hz LP
-                bpMid = lpMid - lpLo                   // bandpass ~100-420
-                lpHi  += (n - lpHi) * 0.18            // ~1.3 kHz LP
-                let hiPass = lpHi - lpMid              // bandpass ~420-1300
-
-                wavePhase += waveHz / sr
-                if wavePhase >= 1.0 { wavePhase -= 1.0 }
-
-                let phase2 = wavePhase * 0.41 + 0.6
-                let crest  = powf(sinf(.pi * wavePhase), 2)          // sharp crest
-                let foam   = powf(sinf(.pi * phase2), 2) * 0.5       // secondary foam
-                let env    = min(crest + foam, 1.0)
-
-                let wave = lpLo * 0.3 + bpMid * 0.5 + hiPass * 0.4
-                sample += wave * env * 0.7
-
-                // --- Double chime ---
-                chimeSamples += 1
-                cyclePos += 1
-
-                switch chimeState {
-                case .idle:
-                    if cyclePos >= cycleLen {
-                        if wantsPlay {
-                            startCycle()
-                        } else {
-                            isPlaying = false
-                        }
-                    }
-                case .ding1:
-                    sample += renderChime(pitchMult: 1.0)
-                    chimeEnv *= expf(-5.0 / sr)
-                    if chimeSamples >= ding1Len {
-                        chimeState = .gap; chimeSamples = 0
-                    }
-                case .gap:
-                    chimeEnv *= 0.96
-                    if chimeSamples >= gapLen {
-                        chimeState = .ding2; chimeSamples = 0
-                        chimeEnv = 0.85
-                        for j in 0..<chimePhases.count { chimePhases[j] = 0 }
-                    }
-                case .ding2:
-                    sample += renderChime(pitchMult: 1.19)   // major 3rd up
-                    chimeEnv *= expf(-5.5 / sr)
-                    if chimeSamples >= ding2Len {
-                        chimeState = .ring; chimeSamples = 0
-                    }
-                case .ring:
-                    sample += renderChime(pitchMult: 1.19) * 0.2
-                    chimeEnv *= expf(-8.0 / sr)
-                    if chimeEnv < 0.001 {
-                        chimeState = .idle; chimeEnv = 0
-                    }
-                }
+            if !wantsPlay && oceanVol < 0.01 {
+                isPlaying = false
+                oceanPlayer.stop()
+                bellPlayer.stop()
+                oceanVol = 0
+                oceanPlayer.volume = 0
             }
-
-            buffer[i] = sample * masterVol
         }
     }
 
-    private func renderChime(pitchMult: Float) -> Float {
-        var out: Float = 0
-        for j in 0..<chimeFreqs.count {
-            out += sinf(2 * .pi * chimePhases[j]) * chimeAmps[j]
-            chimePhases[j] += (chimeFreqs[j] * pitchMult) / sr
-            if chimePhases[j] >= 1.0 { chimePhases[j] -= 1.0 }
-        }
-        return out * chimeEnv * 0.45
+    func stop() {
+        wantsPlay = false
+        isPlaying = false
+        oceanPlayer.stop()
+        bellPlayer.stop()
+        oceanVol = 0
+        oceanPlayer.volume = 0
     }
 
-    private func nextNoise() -> Float {
-        noiseState = noiseState &* 1664525 &+ 1013904223
-        return Float(Int32(bitPattern: noiseState)) / Float(Int32.max)
+    private func playBell() {
+        guard let buf = bellBuffer else { return }
+        bellPlayer.stop()
+        bellPlayer.scheduleBuffer(buf, at: nil, options: [], completionHandler: nil)
+        bellPlayer.play()
+    }
+
+    private func startOceanLoop() {
+        guard let buf = oceanBuffer else { return }
+        oceanPlayer.stop()
+        oceanPlayer.scheduleBuffer(buf, at: nil, options: .loops, completionHandler: nil)
+        oceanPlayer.play()
+    }
+
+    private static func loadCAF(named name: String) -> AVAudioPCMBuffer? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "caf") else {
+            return nil
+        }
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let frameCount = AVAudioFrameCount(file.length)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frameCount) else {
+            return nil
+        }
+        try? file.read(into: buffer)
+        return buffer
     }
 }
 
@@ -320,8 +276,7 @@ final class SpatialAudioEngine: ObservableObject {
     private let shrinePing: ShrinePingVoice
     private var shrineNode: AVAudioSourceNode?
 
-    private let shoreAmbient: ShoreAmbientVoice
-    private var shoreNode: AVAudioSourceNode?
+    private let shoreAudio = ShoreAudioManager()
 
     /// Whether the on-target shore ambient is currently playing.
     @Published var isOnTarget: Bool = false
@@ -336,26 +291,26 @@ final class SpatialAudioEngine: ObservableObject {
     private let motion = CMMotionManager()
     private let sampleRate: Double = 44100
 
-    // MARK: - Head tracking (compass + gyro fusion)
+    // MARK: - Head tracking (gyro-relative — no magnetometer for direction)
 
-    /// GPS coordinate of the beacon. Drift-proof anchor.
+    /// GPS coordinate of the beacon (for distance only, not direction).
     private var beaconCoordinate: CLLocationCoordinate2D?
-
-    /// Fallback: compass bearing if GPS isn't available when beacon is placed.
-    private var worldBearingOfBeacon: Float = 0
 
     /// Threshold distance to auto-clear the beacon (meters).
     private var arrivalThresholdMeters: Float = 3.0
 
-    /// Smoothed GPS-derived bearing to beacon (prevents jitter from GPS noise).
-    private var smoothedGPSBearing: Float = 0
+    // Gyro-relative tracking: the beacon's direction is tracked purely from
+    // gyroscope rotation deltas since placement. The magnetometer and GPS are
+    // NOT used for direction — only the gyro, which is rock-solid indoors.
 
-    /// Frozen GPS bearing used when the user is stationary (speed < threshold).
-    /// GPS bearing is only updated when the user is actually moving.
-    private var lockedGPSBearing: Float = 0
-    private var isGPSBearingLocked: Bool = false
+    /// The relative angle of the beacon at placement time (degrees).
+    private var initialRelativeAngle: Float = 0
 
-    // (prevGyroYaw removed — Apple's .xMagneticNorthZVertical handles fusion internally)
+    /// The raw gyro yaw (radians) at the moment the beacon was placed.
+    private var gyroYawAtPlacement: Double = .nan
+
+    /// Latest raw gyro yaw (radians), updated every frame at 60 Hz.
+    private var currentGyroYaw: Double = .nan
 
     // MARK: - Observers
 
@@ -370,7 +325,7 @@ final class SpatialAudioEngine: ObservableObject {
 
     init() {
         shrinePing = ShrinePingVoice(sampleRate: Float(sampleRate))
-        shoreAmbient = ShoreAmbientVoice(sampleRate: Float(sampleRate))
+        shoreAudio.loadBuffers()
         buildAudioGraph()
         registerSessionObservers()
     }
@@ -401,26 +356,28 @@ final class SpatialAudioEngine: ObservableObject {
         beaconDistanceMeters = distanceMeters
         arrivalThresholdMeters = max(2.0, distanceMeters * 0.2)
 
-        let worldBearing = Double(Self.wrapAngle360(fusedHeadingDegrees + degrees))
-        worldBearingOfBeacon = Float(worldBearing)
-        smoothedGPSBearing = Float(worldBearing)
-        lockedGPSBearing = Float(worldBearing)
-        isGPSBearingLocked = false
+        // Snapshot gyro yaw at placement. Direction will be tracked
+        // purely from gyro rotation deltas — no magnetometer.
+        initialRelativeAngle = degrees
+        gyroYawAtPlacement = currentGyroYaw
 
+        // GPS coordinate for distance tracking (not direction)
+        let compassBearing = Double(Self.wrapAngle360(fusedHeadingDegrees + degrees))
         if let userCoord = LocationManager.shared.currentCoordinate {
             beaconCoordinate = Self.destinationCoordinate(
                 from: userCoord,
-                bearingDegrees: worldBearing,
+                bearingDegrees: compassBearing,
                 distanceMeters: Double(distanceMeters)
             )
-            print("[SpatialAudio] Beacon GPS: \(beaconCoordinate!.latitude), \(beaconCoordinate!.longitude) (\(distanceMeters)m at \(String(format: "%.0f", worldBearing))°)")
+            print("[SpatialAudio] Beacon GPS: \(beaconCoordinate!.latitude), \(beaconCoordinate!.longitude) (\(distanceMeters)m)")
         } else {
             beaconCoordinate = nil
-            print("[SpatialAudio] No GPS — using compass bearing \(String(format: "%.0f", worldBearing))° as fallback")
         }
+        print("[SpatialAudio] Beacon placed: \(degrees)° relative, gyroYaw=\(String(format: "%.3f", currentGyroYaw))")
 
         beaconActive = true
         shrinePing.targetVolume = 0.70
+        relativeBeaconAngle = degrees
         updateShrineNodePosition()
     }
 
@@ -428,7 +385,7 @@ final class SpatialAudioEngine: ObservableObject {
         beaconActive = false
         beaconCoordinate = nil
         shrinePing.targetVolume = 0
-        shoreAmbient.wantsPlay = false
+        shoreAudio.stop()
         isOnTarget = false
         beaconBearingDegrees = 0
         beaconDistanceMeters = 0
@@ -538,37 +495,32 @@ final class SpatialAudioEngine: ObservableObject {
     private func updateShrineNodePosition() {
         guard beaconActive else {
             relativeBeaconAngle = 0
-            shoreAmbient.wantsPlay = false
+            shoreAudio.wantsPlay = false
+            shoreAudio.update()
             isOnTarget = false
             return
         }
 
-        var bearingToBeacon = Double(worldBearingOfBeacon)
+        // --- Direction: pure gyro-relative (rock solid, no magnetometer) ---
+        if !gyroYawAtPlacement.isNaN && !currentGyroYaw.isNaN {
+            var yawDelta = currentGyroYaw - gyroYawAtPlacement
+            if yawDelta > .pi { yawDelta -= 2 * .pi }
+            if yawDelta < -.pi { yawDelta += 2 * .pi }
+            // Gyro yaw increases CCW, so turning right (CW) = negative delta.
+            // Turning right should move the beacon left → subtract delta.
+            let gyroRelative = initialRelativeAngle + Float(yawDelta * 180.0 / .pi)
+            let rawRelative = Self.wrapAngle(gyroRelative)
+
+            relativeBeaconAngle = Self.circularEMA(
+                current: relativeBeaconAngle,
+                target: rawRelative,
+                alpha: 0.25
+            )
+        }
+
+        // --- Distance: GPS (only used for distance, not direction) ---
         if let beaconCoord = beaconCoordinate,
            let userCoord = LocationManager.shared.currentCoordinate {
-
-            let rawGPSBearing = Float(Self.bearing(from: userCoord, to: beaconCoord))
-            let speed = LocationManager.shared.currentSpeed
-            let isMoving = speed > 0.5
-
-            if isMoving {
-                // User is walking — GPS positions are reliable. Update bearing.
-                smoothedGPSBearing = Self.circularEMA(
-                    current: smoothedGPSBearing,
-                    target: rawGPSBearing,
-                    alpha: 0.15
-                )
-                lockedGPSBearing = smoothedGPSBearing
-                isGPSBearingLocked = false
-            } else {
-                // User is stationary — GPS jitters wildly. Freeze bearing.
-                if !isGPSBearingLocked {
-                    lockedGPSBearing = smoothedGPSBearing
-                    isGPSBearingLocked = true
-                }
-            }
-            bearingToBeacon = Double(lockedGPSBearing)
-
             let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
             let beaconLoc = CLLocation(latitude: beaconCoord.latitude, longitude: beaconCoord.longitude)
             let rawDist = Float(userLoc.distance(from: beaconLoc))
@@ -581,40 +533,24 @@ final class SpatialAudioEngine: ObservableObject {
             }
         }
 
-        let rawRelative = Self.wrapAngle(Float(bearingToBeacon) - fusedHeadingDegrees)
-
-        relativeBeaconAngle = Self.circularEMA(
-            current: relativeBeaconAngle,
-            target: rawRelative,
-            alpha: 0.10
-        )
-
+        // --- Audio spatialization ---
         let rad = relativeBeaconAngle * Float.pi / 180
         let audioDist: Float = 4.0
-        let x = sinf(rad) * audioDist
-        let z = -cosf(rad) * audioDist
+        shrineNode?.position = AVAudio3DPoint(
+            x: sinf(rad) * audioDist, y: 0, z: -cosf(rad) * audioDist
+        )
 
-        shrineNode?.position = AVAudio3DPoint(x: x, y: 0, z: z)
-
-        // On-target zone: ±20° triggers the shore chime. Once triggered
-        // the full cycle plays out even if the user briefly drifts outside.
+        // --- Shore audio (on-target zone ±20°) ---
         let inZone = abs(relativeBeaconAngle) < 20
-        shoreAmbient.wantsPlay = inZone
-        let shoreActive = shoreAmbient.isPlaying || inZone
-        isOnTarget = shoreActive
+        shoreAudio.wantsPlay = inZone
+        shoreAudio.update()
+        isOnTarget = shoreAudio.isPlaying
 
-        if shoreActive {
-            shrinePing.targetVolume = 0
-        } else {
-            shrinePing.targetVolume = 0.70
-        }
+        shrinePing.targetVolume = shoreAudio.isPlaying ? 0 : 0.70
 
         posLogCount += 1
         if posLogCount % 120 == 1 {
-            let gpsMode = beaconCoordinate != nil ? "GPS" : "compass"
-            let speed = LocationManager.shared.currentSpeed
-            let locked = isGPSBearingLocked ? "LOCKED" : "live"
-            print("[ShrinePos] [\(gpsMode)|\(locked)] heading=\(String(format: "%.0f", fusedHeadingDegrees))° bearing=\(String(format: "%.0f", bearingToBeacon))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m speed=\(String(format: "%.1f", speed))m/s zone=\(inZone) playing=\(shoreAmbient.isPlaying)")
+            print("[ShrinePos] gyro-rel heading=\(String(format: "%.0f", fusedHeadingDegrees))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m zone=\(inZone) shore=\(shoreAudio.isPlaying)")
         }
     }
 
@@ -657,21 +593,7 @@ final class SpatialAudioEngine: ObservableObject {
         node.position = AVAudio3DPoint(x: 0, y: 0, z: -4)
         shrineNode = node
 
-        // Shore ambient (on-target reward): centered ahead, non-spatialized so it
-        // feels like a gentle ambient wash rather than a point source.
-        let shore = shoreAmbient
-        let shNode = AVAudioSourceNode(format: mono) { [shore] _, _, frameCount, abl in
-            let ptr = UnsafeMutableAudioBufferListPointer(abl)
-            if let buf = ptr.first?.mData?.assumingMemoryBound(to: Float.self) {
-                shore.render(into: buf, frameCount: Int(frameCount))
-            }
-            return noErr
-        }
-        avEngine.attach(shNode)
-        avEngine.connect(shNode, to: environment, format: mono)
-        shNode.renderingAlgorithm = .equalPowerPanning
-        shNode.position = AVAudio3DPoint(x: 0, y: 0, z: -1)
-        shoreNode = shNode
+        shoreAudio.attach(to: avEngine, environment: environment)
 
         avEngine.attach(sightAssistSpeechPlayer)
         avEngine.connect(sightAssistSpeechPlayer, to: environment, format: mono)
@@ -718,7 +640,7 @@ final class SpatialAudioEngine: ObservableObject {
 
     private func stopEngine() {
         shrinePing.targetVolume = 0
-        shoreAmbient.wantsPlay = false
+        shoreAudio.stop()
         isOnTarget = false
         beaconActive = false
         beaconCoordinate = nil
@@ -794,44 +716,39 @@ final class SpatialAudioEngine: ObservableObject {
 
     private var motionLogCount = 0
 
-    /// Uses Apple's built-in sensor fusion (.xMagneticNorthZVertical) which
-    /// runs an internal Kalman filter across gyro + accelerometer + magnetometer.
-    /// This is the same heading source ARKit/MapKit use and is far more stable
-    /// than a manual complementary filter.
+    /// Pure gyroscope tracking at 60 Hz. No magnetometer in the loop —
+    /// the beacon direction is computed entirely from gyro rotation deltas
+    /// since placement. This is rock-solid indoors where magnetometers fail.
     private func startMotionTracking() {
         guard motion.isDeviceMotionAvailable else {
-            print("[SpatialAudio] DeviceMotion NOT available — falling back to compass only")
+            print("[SpatialAudio] DeviceMotion NOT available")
             return
         }
         motion.deviceMotionUpdateInterval = 1.0 / 60
-        motion.startDeviceMotionUpdates(using: .xMagneticNorthZVertical, to: .main) { [weak self] data, _ in
+        motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
             guard let self, let att = data?.attitude else { return }
 
-            // Apple's fusion gives yaw relative to magnetic north.
-            // yaw = 0 → magnetic north, increases CCW.
-            // Convert to compass convention: 0 = north, increases CW.
-            var heading = Float(-att.yaw * 180.0 / .pi)
-            heading = Self.wrapAngle360(heading)
+            self.currentGyroYaw = att.yaw
 
-            // Smooth heavily to prevent the ping from jittering.
-            // Alpha 0.15 ≈ 10-frame lag (~170ms) which feels responsive
-            // for head turns but kills magnetometer micro-noise.
-            self.fusedHeadingDegrees = Self.circularEMA(
-                current: self.fusedHeadingDegrees,
-                target: heading,
-                alpha: 0.15
-            )
-            self.fusedHeadingDegrees = Self.wrapAngle360(self.fusedHeadingDegrees)
+            // fusedHeadingDegrees still used for UI compass display
+            // (gently pulled toward CLHeading for cosmetic accuracy)
+            let compassHeading = Float(LocationManager.shared.currentHeading)
+            if compassHeading > 0 {
+                self.fusedHeadingDegrees = Self.circularEMA(
+                    current: self.fusedHeadingDegrees,
+                    target: compassHeading,
+                    alpha: 0.03
+                )
+                self.fusedHeadingDegrees = Self.wrapAngle360(self.fusedHeadingDegrees)
+            }
 
             self.updateShrineNodePosition()
 
             self.motionLogCount += 1
             if self.motionLogCount % 120 == 1 {
-                let compass = LocationManager.shared.currentHeading
-                let speed = LocationManager.shared.currentSpeed
-                print("[Heading] fused=\(String(format: "%.0f", self.fusedHeadingDegrees))° apple=\(String(format: "%.0f", heading))° compass=\(String(format: "%.0f", compass))° speed=\(String(format: "%.1f", speed))m/s beacon=\(self.beaconActive) rel=\(String(format: "%.1f", self.relativeBeaconAngle))°")
+                print("[Heading] gyroYaw=\(String(format: "%.3f", att.yaw)) compass=\(String(format: "%.0f", compassHeading))° beacon=\(self.beaconActive) rel=\(String(format: "%.1f", self.relativeBeaconAngle))°")
             }
         }
-        print("[SpatialAudio] Apple sensor fusion started (.xMagneticNorthZVertical, 60 Hz)")
+        print("[SpatialAudio] Gyro-relative tracking started (60 Hz, no magnetometer)")
     }
 }
