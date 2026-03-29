@@ -113,7 +113,6 @@ final class ShoreAudioManager {
     private(set) var isPlaying: Bool = false
 
     private let bellPlayer = AVAudioPlayerNode()
-    private let bellPitch = AVAudioUnitTimePitch()
     private let oceanPlayer = AVAudioPlayerNode()
 
     private var bellBuffer: AVAudioPCMBuffer?
@@ -134,12 +133,10 @@ final class ShoreAudioManager {
     func attach(to engine: AVAudioEngine, environment: AVAudioEnvironmentNode) {
         let mono = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
 
-        bellPitch.pitch = 1200
-        bellPitch.rate = 1.0
         engine.attach(bellPlayer)
-        engine.attach(bellPitch)
-        engine.connect(bellPlayer, to: bellPitch, format: bellBuffer?.format ?? mono)
-        engine.connect(bellPitch, to: environment, format: nil)
+        engine.connect(bellPlayer, to: environment, format: bellBuffer?.format ?? mono)
+        bellPlayer.renderingAlgorithm = .equalPowerPanning
+        bellPlayer.position = AVAudio3DPoint(x: 0, y: 0, z: -1)
         bellPlayer.volume = 0.75
 
         engine.attach(oceanPlayer)
