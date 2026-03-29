@@ -1,21 +1,32 @@
 import CoreLocation
 import Combine
 
-/// GPS + compass. Requires NSLocationWhenInUseUsageDescription in Info.plist.
+/// GPS + compass with coordinate smoothing. Requires NSLocationWhenInUseUsageDescription in Info.plist.
 final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = LocationManager()
 
     private let manager = CLLocationManager()
 
+    /// Smoothed GPS coordinate (filtered to reduce jitter when stationary).
     @Published var currentCoordinate: CLLocationCoordinate2D?
     @Published var currentHeading: Double = 0
     @Published var hasPermission: Bool = false
+
+    /// Current speed in m/s from GPS. Negative means invalid.
+    @Published var currentSpeed: Double = -1
+
+    /// Raw unfiltered coordinate for debugging.
+    private var rawCoordinate: CLLocationCoordinate2D?
+
+    /// Smoothing factor for GPS coordinates. Lower = more stable but slower to respond.
+    private let coordAlpha: Double = 0.15
 
     override init() {
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyBest
         manager.headingFilter = 1
+        manager.distanceFilter = kCLDistanceFilterNone
         let status = manager.authorizationStatus
         hasPermission = status == .authorizedWhenInUse || status == .authorizedAlways
     }
@@ -34,7 +45,21 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        currentCoordinate = locations.last?.coordinate
+        guard let loc = locations.last else { return }
+        rawCoordinate = loc.coordinate
+        currentSpeed = loc.speed
+
+        if let prev = currentCoordinate {
+            // When stationary, use very low alpha to virtually freeze position.
+            // When moving, allow faster updates.
+            let isStationary = loc.speed < 0.5
+            let alpha = isStationary ? 0.02 : coordAlpha
+            let lat = prev.latitude + (loc.coordinate.latitude - prev.latitude) * alpha
+            let lon = prev.longitude + (loc.coordinate.longitude - prev.longitude) * alpha
+            currentCoordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        } else {
+            currentCoordinate = loc.coordinate
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {

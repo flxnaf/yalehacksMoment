@@ -185,8 +185,12 @@ final class SpatialAudioEngine: ObservableObject {
     /// Smoothed GPS-derived bearing to beacon (prevents jitter from GPS noise).
     private var smoothedGPSBearing: Float = 0
 
-    /// Previous gyro yaw in radians, for computing frame-to-frame deltas.
-    private var prevGyroYaw: Double = .nan
+    /// Frozen GPS bearing used when the user is stationary (speed < threshold).
+    /// GPS bearing is only updated when the user is actually moving.
+    private var lockedGPSBearing: Float = 0
+    private var isGPSBearingLocked: Bool = false
+
+    // (prevGyroYaw removed — Apple's .xMagneticNorthZVertical handles fusion internally)
 
     // MARK: - Observers
 
@@ -234,6 +238,8 @@ final class SpatialAudioEngine: ObservableObject {
         let worldBearing = Double(Self.wrapAngle360(fusedHeadingDegrees + degrees))
         worldBearingOfBeacon = Float(worldBearing)
         smoothedGPSBearing = Float(worldBearing)
+        lockedGPSBearing = Float(worldBearing)
+        isGPSBearingLocked = false
 
         if let userCoord = LocationManager.shared.currentCoordinate {
             beaconCoordinate = Self.destinationCoordinate(
@@ -370,21 +376,33 @@ final class SpatialAudioEngine: ObservableObject {
         var bearingToBeacon = Double(worldBearingOfBeacon)
         if let beaconCoord = beaconCoordinate,
            let userCoord = LocationManager.shared.currentCoordinate {
-            let rawGPSBearing = Self.bearing(from: userCoord, to: beaconCoord)
 
-            // Smooth the GPS bearing heavily to kill jitter from GPS noise
-            smoothedGPSBearing = Self.circularEMA(
-                current: smoothedGPSBearing,
-                target: Float(rawGPSBearing),
-                alpha: 0.08
-            )
-            bearingToBeacon = Double(smoothedGPSBearing)
+            let rawGPSBearing = Float(Self.bearing(from: userCoord, to: beaconCoord))
+            let speed = LocationManager.shared.currentSpeed
+            let isMoving = speed > 0.5
+
+            if isMoving {
+                // User is walking — GPS positions are reliable. Update bearing.
+                smoothedGPSBearing = Self.circularEMA(
+                    current: smoothedGPSBearing,
+                    target: rawGPSBearing,
+                    alpha: 0.15
+                )
+                lockedGPSBearing = smoothedGPSBearing
+                isGPSBearingLocked = false
+            } else {
+                // User is stationary — GPS jitters wildly. Freeze bearing.
+                if !isGPSBearingLocked {
+                    lockedGPSBearing = smoothedGPSBearing
+                    isGPSBearingLocked = true
+                }
+            }
+            bearingToBeacon = Double(lockedGPSBearing)
 
             let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
             let beaconLoc = CLLocation(latitude: beaconCoord.latitude, longitude: beaconCoord.longitude)
             let rawDist = Float(userLoc.distance(from: beaconLoc))
-            // Smooth distance too
-            beaconDistanceMeters += (rawDist - beaconDistanceMeters) * 0.1
+            beaconDistanceMeters += (rawDist - beaconDistanceMeters) * 0.08
 
             if beaconDistanceMeters < arrivalThresholdMeters {
                 clearBeacon()
@@ -395,14 +413,12 @@ final class SpatialAudioEngine: ObservableObject {
 
         let rawRelative = Self.wrapAngle(Float(bearingToBeacon) - fusedHeadingDegrees)
 
-        // Heavy smoothing on the published angle for stable UI (Pokémon GO feel)
         relativeBeaconAngle = Self.circularEMA(
             current: relativeBeaconAngle,
             target: rawRelative,
-            alpha: 0.12
+            alpha: 0.15
         )
 
-        // Audio uses the smoothed value too for consistent L/R panning
         let rad = relativeBeaconAngle * Float.pi / 180
         let audioDist: Float = 4.0
         let x = sinf(rad) * audioDist
@@ -413,7 +429,9 @@ final class SpatialAudioEngine: ObservableObject {
         posLogCount += 1
         if posLogCount % 120 == 1 {
             let gpsMode = beaconCoordinate != nil ? "GPS" : "compass"
-            print("[ShrinePos] [\(gpsMode)] heading=\(String(format: "%.0f", fusedHeadingDegrees))° bearing=\(String(format: "%.0f", bearingToBeacon))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m")
+            let speed = LocationManager.shared.currentSpeed
+            let locked = isGPSBearingLocked ? "LOCKED" : "live"
+            print("[ShrinePos] [\(gpsMode)|\(locked)] heading=\(String(format: "%.0f", fusedHeadingDegrees))° bearing=\(String(format: "%.0f", bearingToBeacon))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m speed=\(String(format: "%.1f", speed))m/s")
         }
     }
 
@@ -514,7 +532,6 @@ final class SpatialAudioEngine: ObservableObject {
             self?.avEngine.stop()
         }
         motion.stopDeviceMotionUpdates()
-        prevGyroYaw = .nan
         pathFinder.reset()
         print("[SpatialAudio] Stopped")
     }
@@ -576,48 +593,43 @@ final class SpatialAudioEngine: ObservableObject {
 
     private var motionLogCount = 0
 
-    /// Complementary filter: gyro deltas at 60 Hz for smooth tracking,
-    /// magnetometer compass as the absolute anchor to prevent drift.
+    /// Uses Apple's built-in sensor fusion (.xMagneticNorthZVertical) which
+    /// runs an internal Kalman filter across gyro + accelerometer + magnetometer.
+    /// This is the same heading source ARKit/MapKit use and is far more stable
+    /// than a manual complementary filter.
     private func startMotionTracking() {
         guard motion.isDeviceMotionAvailable else {
             print("[SpatialAudio] DeviceMotion NOT available — falling back to compass only")
             return
         }
         motion.deviceMotionUpdateInterval = 1.0 / 60
-        motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
+        motion.startDeviceMotionUpdates(using: .xMagneticNorthZVertical, to: .main) { [weak self] data, _ in
             guard let self, let att = data?.attitude else { return }
 
-            // 1. Compute gyro delta (frame-to-frame change)
-            let gyroYaw = att.yaw
-            if !self.prevGyroYaw.isNaN {
-                var delta = gyroYaw - self.prevGyroYaw
-                if delta > .pi { delta -= 2 * .pi }
-                if delta < -.pi { delta += 2 * .pi }
-                // Gyro yaw increases CCW; compass increases CW → negate
-                let deltaDeg = Float(-delta * 180.0 / .pi)
-                self.fusedHeadingDegrees += deltaDeg
-            }
-            self.prevGyroYaw = gyroYaw
+            // Apple's fusion gives yaw relative to magnetic north.
+            // yaw = 0 → magnetic north, increases CCW.
+            // Convert to compass convention: 0 = north, increases CW.
+            var heading = Float(-att.yaw * 180.0 / .pi)
+            heading = Self.wrapAngle360(heading)
 
-            // 2. Gently pull toward compass to prevent long-term drift.
-            // Low alpha (0.02) keeps the gyro's smoothness while the
-            // compass prevents accumulated drift over minutes.
-            let compassHeading = Float(LocationManager.shared.currentHeading)
-            if compassHeading > 0 {
-                let diff = Self.wrapAngle(compassHeading - self.fusedHeadingDegrees)
-                self.fusedHeadingDegrees += diff * 0.02
-            }
+            // Blend with a small alpha for frame-to-frame smoothness.
+            // Apple's fusion is already stable, so we just remove micro-jitter.
+            self.fusedHeadingDegrees = Self.circularEMA(
+                current: self.fusedHeadingDegrees,
+                target: heading,
+                alpha: 0.4
+            )
             self.fusedHeadingDegrees = Self.wrapAngle360(self.fusedHeadingDegrees)
 
-            // 3. Move the shrine ping source node
             self.updateShrineNodePosition()
 
             self.motionLogCount += 1
             if self.motionLogCount % 120 == 1 {
                 let compass = LocationManager.shared.currentHeading
-                print("[Heading] fused=\(String(format: "%.0f", self.fusedHeadingDegrees))° compass=\(String(format: "%.0f", compass))° beacon=\(self.beaconActive) rel=\(String(format: "%.1f", self.relativeBeaconAngle))°")
+                let speed = LocationManager.shared.currentSpeed
+                print("[Heading] fused=\(String(format: "%.0f", self.fusedHeadingDegrees))° apple=\(String(format: "%.0f", heading))° compass=\(String(format: "%.0f", compass))° speed=\(String(format: "%.1f", speed))m/s beacon=\(self.beaconActive) rel=\(String(format: "%.1f", self.relativeBeaconAngle))°")
             }
         }
-        print("[SpatialAudio] Compass + gyro fusion started (60 Hz)")
+        print("[SpatialAudio] Apple sensor fusion started (.xMagneticNorthZVertical, 60 Hz)")
     }
 }
