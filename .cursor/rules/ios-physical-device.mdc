@@ -1,0 +1,16 @@
+---
+description: Prefer the user's physical iPhone over the iOS Simulator for Xcode builds and runs
+alwaysApply: true
+---
+
+# iOS: physical device only
+
+For this repo’s **NavigatorImpaired** (and other iOS) work:
+
+1. **Do not** use the iOS Simulator as the default `xcodebuild` destination (avoid `platform=iOS Simulator`, `iphonesimulator`, or a named Simulator device).
+2. **Do** assume builds and runs target the user’s **own connected iPhone**. When a concrete `-destination` is required:
+   - Prefer listing real devices, e.g. `xcodebuild -showdestinations -scheme NavigatorImpaired -project NavigatorImpaired/NavigatorImpaired.xcodeproj` or `xcrun xctrace list devices`, and pick the **physical** iOS device entry (not Simulator).
+   - Or use `-destination 'generic/platform=iOS'` when a generic device build is appropriate and no simulator-specific behavior is needed.
+3. If no device is connected or destinations are ambiguous, **ask the user** to connect their iPhone and/or share the device name or UDID instead of falling back to a simulator.
+
+This matches the user’s preference to always test on their own hardware, not the simulator.

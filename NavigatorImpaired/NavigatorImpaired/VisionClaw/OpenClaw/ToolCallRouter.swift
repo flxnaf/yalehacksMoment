@@ -14,14 +14,25 @@ class ToolCallRouter {
   private let bridge: OpenClawBridge
   private weak var navigationController: NavigationController?
   private weak var audioEngine: SpatialAudioEngine?
+  weak var streamSessionViewModel: StreamSessionViewModel?
+  weak var geminiSessionViewModel: GeminiSessionViewModel?
+  private let roomScanController = RoomScanController()
   private var inFlightTasks: [String: Task<Void, Never>] = [:]
 
-  init(bridge: OpenClawBridge,
-       navigationController: NavigationController? = nil,
-       audioEngine: SpatialAudioEngine? = nil) {
+  init(
+    bridge: OpenClawBridge,
+    navigationController: NavigationController? = nil,
+    audioEngine: SpatialAudioEngine? = nil,
+    streamSessionViewModel: StreamSessionViewModel? = nil,
+    geminiSessionViewModel: GeminiSessionViewModel? = nil
+  ) {
     self.bridge = bridge
     self.navigationController = navigationController
     self.audioEngine = audioEngine
+    self.streamSessionViewModel = streamSessionViewModel
+    self.geminiSessionViewModel = geminiSessionViewModel
+    roomScanController.streamVM = streamSessionViewModel
+    roomScanController.geminiVM = geminiSessionViewModel
   }
 
   /// Route a tool call from Gemini to OpenClaw. Calls sendResponse with the
@@ -44,6 +55,7 @@ class ToolCallRouter {
           result = .failure("Missing destination for navigate_to.")
         } else if let nav = navigationController {
           do {
+            audioEngine?.releaseUserBeaconControlForNavigation()
             try await nav.startNavigation(to: destination)
             result = .success("OK")
           } catch {
@@ -56,7 +68,7 @@ class ToolCallRouter {
         let bearing = (call.args["bearing"] as? NSNumber)?.floatValue ?? 0
         let distance = (call.args["distance_meters"] as? NSNumber)?.floatValue ?? 10
         if let engine = audioEngine {
-          engine.setBeaconBearing(bearing, distanceMeters: distance)
+          engine.setBeaconBearing(bearing, distanceMeters: distance, fromUserTool: true)
           result = .success("Ping beacon placed \(distance)m away at \(bearing)° from your current facing. It will auto-clear when you arrive.")
         } else {
           result = .failure("Spatial audio engine is not available.")
@@ -84,6 +96,47 @@ class ToolCallRouter {
             self.bridge.lastToolCallStatus = r.ok ? .completed(callName) : .failed(callName, r.detail)
             result = r.ok ? .success(r.detail) : .failure(r.detail)
           }
+        }
+      } else if callName == "scan_room" {
+        self.roomScanController.streamVM = self.streamSessionViewModel
+        self.roomScanController.geminiVM = self.geminiSessionViewModel
+        do {
+          let summary = try await self.roomScanController.startScan()
+          if let g = self.geminiSessionViewModel {
+            if !g.isGeminiActive || g.connectionState != .ready {
+              NSLog(
+                "[ToolCall] scan_room finished but Gemini session is not active (isGeminiActive=%@ state=%@); tool response may not reach the client.",
+                String(g.isGeminiActive), String(describing: g.connectionState))
+            }
+          } else {
+            NSLog("[ToolCall] scan_room finished but geminiSessionViewModel is nil; tool response may not reach the client.")
+          }
+          result = .success(summary)
+        } catch let roomErr as RoomScanError {
+          result = .failure(roomErr.localizedDescription)
+        } catch {
+          result = .failure("Scan failed: \(error.localizedDescription)")
+        }
+      } else if callName == "find_object" {
+        let query = (call.args["query"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let found = SpatialObjectMap.shared.find(query: query) {
+          if let engine = self.audioEngine {
+            engine.setBeacon(atWorldPosition: found.worldPosition)
+            result = .success("Found \(found.label). Pointing audio beacon toward it now.")
+          } else {
+            result = .failure("Spatial audio engine is not available.")
+          }
+        } else {
+          let q = query.isEmpty ? "that object" : query
+          result = .failure("Couldn't find \(q). Try scanning the room first.")
+        }
+      } else if callName == "list_objects" {
+        let objects = SpatialObjectMap.shared.allObjects()
+        if objects.isEmpty {
+          result = .failure("No objects mapped yet. Say 'scan the room' first.")
+        } else {
+          let list = objects.map(\.label).joined(separator: ", ")
+          result = .success("I found \(objects.count) objects: \(list).")
         }
       } else {
         let taskDesc = call.args["task"] as? String ?? String(describing: call.args)

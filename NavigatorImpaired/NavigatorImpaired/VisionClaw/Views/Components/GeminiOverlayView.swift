@@ -44,7 +44,12 @@ struct GeminiStatusBar: View {
     switch geminiVM.openClawConnectionState {
     case .connected: return "OpenClaw"
     case .checking: return "OpenClaw..."
-    case .unreachable: return "OpenClaw Off"
+    case .unreachable(let reason):
+      let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+      if trimmed.isEmpty { return "OpenClaw Off" }
+      let maxLen = 56
+      if trimmed.count <= maxLen { return trimmed }
+      return String(trimmed.prefix(maxLen - 1)) + "…"
     case .notConfigured: return "No OpenClaw"
     }
   }
@@ -145,6 +150,32 @@ struct ToolCallStatusView: View {
     case .failed: return Color.red.opacity(0.3)
     case .cancelled: return Color.black.opacity(0.6)
     case .idle: return Color.clear
+    }
+  }
+}
+
+/// Shown when a spatial beacon is active but Settings routes audio to the iPhone speaker (mono).
+struct SpatialStereoRouteBanner: View {
+  @ObservedObject var audioEngine: SpatialAudioEngine
+  @AppStorage("speakerOutputEnabled") private var speakerOutputEnabled = false
+
+  var body: some View {
+    if audioEngine.beaconActive && speakerOutputEnabled {
+      HStack(alignment: .top, spacing: 8) {
+        Image(systemName: "ear.badge.waveform")
+          .foregroundStyle(.orange)
+          .font(.system(size: 16))
+        Text(
+          "Spatial direction needs stereo. Turn off Speaker Output in Settings and use glasses or earbuds."
+        )
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.white)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(10)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Color.orange.opacity(0.42))
+      .cornerRadius(10)
     }
   }
 }

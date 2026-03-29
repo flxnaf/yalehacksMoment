@@ -1,0 +1,15 @@
+---
+description: Propose git commit subjects from staged changes when committing or asking
+alwaysApply: true
+---
+
+# Git commit messages
+
+When the user is preparing a **git commit**, has the **commit message editor** open, asks what to write for the commit, or leaves a vague subject (for example `WIP`):
+
+1. When practical, use `git status` and `git diff --staged` (or a short stat summary) so suggestions match what is actually staged.
+2. Offer **1–3** candidate **subject lines** in **imperative mood** (for example “Add gateway client”, not “Added”).
+3. Prefer **Conventional Commits** when it fits this repo: `type(scope): summary` with types such as `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`. Keep the first line roughly **50–72 characters** when you can.
+4. Add a **body** only if the change needs context beyond the subject.
+
+Do not run `git commit` unless the user explicitly asks you to commit.

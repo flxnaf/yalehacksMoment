@@ -6,8 +6,8 @@ class IPhoneCameraManager: NSObject {
   private let context = CIContext()
   private var isRunning = false
 
-  var onFrameCaptured: ((UIImage) -> Void)?
-  var onARFrameUpdate: ((ARFrame) -> Void)?
+  /// Image and `ARFrame` are from the same `session(_:didUpdate:)` callback (aligned pose + pixels).
+  var onFrameCaptured: ((UIImage, ARFrame) -> Void)?
 
   func start() {
     guard !isRunning else { return }
@@ -60,8 +60,7 @@ extension IPhoneCameraManager: ARSessionDelegate {
     guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
     let image = UIImage(cgImage: cgImage)
 
-    onFrameCaptured?(image)
-    onARFrameUpdate?(frame)
+    onFrameCaptured?(image, frame)
   }
 
   func session(_ session: ARSession, didFailWithError error: Error) {

@@ -127,6 +127,8 @@ struct StreamView: View {
 
         // Row 2: Gyro heading + locator bar
         if viewModel.audioEngine.isEnabled {
+          SpatialStereoRouteBanner(audioEngine: viewModel.audioEngine)
+            .padding(.bottom, 4)
           PingIndicatorOverlay(audioEngine: viewModel.audioEngine)
             .padding(.bottom, 4)
         }
