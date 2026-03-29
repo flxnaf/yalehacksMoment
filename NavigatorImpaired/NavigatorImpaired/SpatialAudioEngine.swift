@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreLocation
 import CoreMotion
 import UIKit
 
@@ -101,58 +102,6 @@ final class ShrinePingVoice {
     }
 }
 
-// MARK: - DepthRotationEstimator
-
-/// Estimates horizontal rotation from consecutive depth frames by
-/// tracking how the depth profile shifts left/right between frames.
-/// Works as a supplementary signal to the phone IMU — especially
-/// useful when the glasses are the depth source and the phone is
-/// in the pocket (IMU tracks pocket, not head).
-final class DepthRotationEstimator {
-
-    private var prevProfile: [Float]?
-
-    /// Returns estimated yaw delta in degrees since last call.
-    /// Positive = turned right, negative = turned left.
-    func estimateYawDelta(profile: [Float]) -> Float {
-        guard let prev = prevProfile, prev.count == profile.count, profile.count >= 6 else {
-            prevProfile = profile
-            return 0
-        }
-        defer { prevProfile = profile }
-
-        let n = profile.count
-        // Cross-correlate prev and current to find the horizontal shift.
-        // Search ±25% of the profile width.
-        let maxShift = max(1, n / 4)
-        var bestShift = 0
-        var bestCorr: Float = -.greatestFiniteMagnitude
-
-        for shift in -maxShift...maxShift {
-            var corr: Float = 0
-            var count = 0
-            for i in 0..<n {
-                let j = i + shift
-                guard j >= 0, j < n else { continue }
-                corr += prev[i] * profile[j]
-                count += 1
-            }
-            if count > 0 { corr /= Float(count) }
-            if corr > bestCorr {
-                bestCorr = corr
-                bestShift = shift
-            }
-        }
-
-        // Convert column shift to degrees.
-        // PathFinder uses ~24 columns spanning ~70° FOV.
-        let degreesPerColumn: Float = 70.0 / Float(n)
-        return Float(bestShift) * degreesPerColumn
-    }
-
-    func reset() { prevProfile = nil }
-}
-
 // MARK: - SpatialAudioEngine
 
 /// Spatial audio engine with a single BOTW Sheikah Sensor ping.
@@ -164,8 +113,8 @@ final class DepthRotationEstimator {
 /// physically moves to x = -dist (hard left in the audio scene).
 ///
 /// Head orientation is fused from:
-/// 1. Phone IMU (CMMotionManager) — primary, 60 Hz
-/// 2. Depth profile cross-correlation — supplementary, ~10 Hz
+/// 1. CLHeading magnetometer compass — absolute anchor, drift-free
+/// 2. CMMotionManager gyro deltas — smooth 60 Hz interpolation
 @MainActor
 final class SpatialAudioEngine: ObservableObject {
 
@@ -179,12 +128,21 @@ final class SpatialAudioEngine: ObservableObject {
 
     @Published var beaconActive: Bool = false
 
-    /// World-space bearing where the ping was placed (degrees from
-    /// the heading at the moment of placement).
+    /// The relative bearing Gemini requested (for UI display).
     @Published var beaconBearingDegrees: Float = 0
 
-    /// Current fused heading in degrees (0 = initial forward).
+    /// Current fused heading in degrees (compass-referenced, 0 = north).
     @Published var fusedHeadingDegrees: Float = 0
+
+    /// Smoothed angle of the shrine ping relative to the user's current facing.
+    /// 0 = ahead, negative = left, positive = right. Range: -180...180.
+    @Published var relativeBeaconAngle: Float = 0
+
+    /// Distance from user to the beacon in meters. Updated every frame.
+    @Published var beaconDistanceMeters: Float = 0
+
+    /// The initial distance when the beacon was placed (for UI progress).
+    @Published var beaconInitialDistance: Float = 0
 
     // PathFinder results kept for future use / UI
     @Published var activePath: ClearPath? = nil
@@ -213,19 +171,22 @@ final class SpatialAudioEngine: ObservableObject {
     private let motion = CMMotionManager()
     private let sampleRate: Double = 44100
 
-    // MARK: - Head tracking
+    // MARK: - Head tracking (compass + gyro fusion)
 
-    /// World-space heading captured at the moment the beacon was placed.
-    private var headingAtPlacement: Float = 0
+    /// GPS coordinate of the beacon. Drift-proof anchor.
+    private var beaconCoordinate: CLLocationCoordinate2D?
 
-    /// Raw IMU yaw in degrees (cumulative from CMMotionManager).
-    private var imuYawDegrees: Float = 0
+    /// Fallback: compass bearing if GPS isn't available when beacon is placed.
+    private var worldBearingOfBeacon: Float = 0
 
-    /// Depth-based rotation estimator for supplementary tracking.
-    private let depthRotation = DepthRotationEstimator()
+    /// Threshold distance to auto-clear the beacon (meters).
+    private var arrivalThresholdMeters: Float = 3.0
 
-    /// Accumulated depth-based yaw correction in degrees.
-    private var depthYawAccum: Float = 0
+    /// Smoothed GPS-derived bearing to beacon (prevents jitter from GPS noise).
+    private var smoothedGPSBearing: Float = 0
+
+    /// Previous gyro yaw in radians, for computing frame-to-frame deltas.
+    private var prevGyroYaw: Double = .nan
 
     // MARK: - Observers
 
@@ -256,26 +217,86 @@ final class SpatialAudioEngine: ObservableObject {
         isEnabled && avEngine.isRunning
     }
 
+    /// Heading in radians for legacy callers (verbal cue controller, etc.).
+    var currentHeading: Float {
+        fusedHeadingDegrees * Float.pi / 180
+    }
+
     /// Place the shrine ping at a bearing relative to where the user is
     /// currently facing. 0 = ahead, -90 = left, +90 = right.
-    func setBeaconBearing(_ degrees: Float) {
-        headingAtPlacement = fusedHeadingDegrees
+    /// `distanceMeters` sets how far away the beacon is (default 10m).
+    func setBeaconBearing(_ degrees: Float, distanceMeters: Float = 10) {
         beaconBearingDegrees = degrees
+        beaconInitialDistance = distanceMeters
+        beaconDistanceMeters = distanceMeters
+        arrivalThresholdMeters = max(2.0, distanceMeters * 0.2)
+
+        let worldBearing = Double(Self.wrapAngle360(fusedHeadingDegrees + degrees))
+        worldBearingOfBeacon = Float(worldBearing)
+        smoothedGPSBearing = Float(worldBearing)
+
+        if let userCoord = LocationManager.shared.currentCoordinate {
+            beaconCoordinate = Self.destinationCoordinate(
+                from: userCoord,
+                bearingDegrees: worldBearing,
+                distanceMeters: Double(distanceMeters)
+            )
+            print("[SpatialAudio] Beacon GPS: \(beaconCoordinate!.latitude), \(beaconCoordinate!.longitude) (\(distanceMeters)m at \(String(format: "%.0f", worldBearing))°)")
+        } else {
+            beaconCoordinate = nil
+            print("[SpatialAudio] No GPS — using compass bearing \(String(format: "%.0f", worldBearing))° as fallback")
+        }
+
         beaconActive = true
         shrinePing.targetVolume = 0.70
         updateShrineNodePosition()
-        print("[SpatialAudio] Shrine ping placed at \(degrees)° from current heading (\(fusedHeadingDegrees)°)")
     }
 
     func clearBeacon() {
         beaconActive = false
+        beaconCoordinate = nil
         shrinePing.targetVolume = 0
         beaconBearingDegrees = 0
-        print("[SpatialAudio] Shrine ping cleared")
+        beaconDistanceMeters = 0
+        beaconInitialDistance = 0
+        print("[SpatialAudio] Beacon cleared")
     }
 
-    /// Called each depth frame. Runs PathFinder for UI and feeds the
-    /// depth rotation estimator for supplementary head tracking.
+    // MARK: - GPS math
+
+    /// Compute destination coordinate given start, bearing, and distance.
+    private static func destinationCoordinate(
+        from origin: CLLocationCoordinate2D,
+        bearingDegrees: Double,
+        distanceMeters: Double
+    ) -> CLLocationCoordinate2D {
+        let R = 6_371_000.0
+        let lat1 = origin.latitude * .pi / 180
+        let lon1 = origin.longitude * .pi / 180
+        let brng = bearingDegrees * .pi / 180
+        let d = distanceMeters / R
+
+        let lat2 = asin(sin(lat1) * cos(d) + cos(lat1) * sin(d) * cos(brng))
+        let lon2 = lon1 + atan2(sin(brng) * sin(d) * cos(lat1),
+                                 cos(d) - sin(lat1) * sin(lat2))
+        return CLLocationCoordinate2D(latitude: lat2 * 180 / .pi,
+                                       longitude: lon2 * 180 / .pi)
+    }
+
+    /// Bearing in degrees from one coordinate to another (0 = north, CW).
+    private static func bearing(from: CLLocationCoordinate2D,
+                                to: CLLocationCoordinate2D) -> Double {
+        let lat1 = from.latitude * .pi / 180
+        let lat2 = to.latitude * .pi / 180
+        let dLon = (to.longitude - from.longitude) * .pi / 180
+        let y = sin(dLon) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+        var b = atan2(y, x) * 180 / .pi
+        if b < 0 { b += 360 }
+        return b
+    }
+
+    /// Called each depth frame. Runs PathFinder for UI.
     func applyPerceptionFrame(
         depthMap: [Float],
         width: Int,
@@ -290,15 +311,6 @@ final class SpatialAudioEngine: ObservableObject {
         depthProfile = scanResult.profile
         rawPaths = scanResult.paths
         activePath = scanResult.paths.first
-
-        // Depth-based rotation: cross-correlate depth profiles
-        let depthDelta = depthRotation.estimateYawDelta(profile: scanResult.profile)
-        depthYawAccum += depthDelta
-        // Blend into fused heading (low weight — IMU is primary)
-        fusedHeadingDegrees = imuYawDegrees + depthYawAccum * 0.15
-
-        // Update shrine node position based on new heading
-        updateShrineNodePosition()
 
         if hapticsEnabled {
             haptics.updatePolicy(
@@ -323,31 +335,86 @@ final class SpatialAudioEngine: ObservableObject {
 
     // MARK: - Shrine node positioning (the core spatial logic)
 
-    /// Computes where the user has turned since placement, then places
-    /// the source node at the correct relative angle so HRTF pans it.
-    ///
-    /// Example: beacon at 0° (ahead), user turns right 90° →
-    /// relative angle = -90° → source at (-dist, 0, 0) = hard left ear.
+    private var posLogCount = 0
+
+    /// Normalize any angle into -180...+180.
+    private static func wrapAngle(_ a: Float) -> Float {
+        var v = a.truncatingRemainder(dividingBy: 360)
+        if v > 180 { v -= 360 }
+        if v < -180 { v += 360 }
+        return v
+    }
+
+    /// Normalize any angle into 0...360.
+    private static func wrapAngle360(_ a: Float) -> Float {
+        var v = a.truncatingRemainder(dividingBy: 360)
+        if v < 0 { v += 360 }
+        return v
+    }
+
+    /// Circular EMA: smoothly interpolates angles, handling the
+    /// ±180° wrap-around so the value never snaps across the boundary.
+    private static func circularEMA(current: Float, target: Float, alpha: Float) -> Float {
+        var diff = target - current
+        if diff > 180 { diff -= 360 }
+        if diff < -180 { diff += 360 }
+        return wrapAngle(current + diff * alpha)
+    }
+
     private func updateShrineNodePosition() {
-        guard beaconActive else { return }
+        guard beaconActive else {
+            relativeBeaconAngle = 0
+            return
+        }
 
-        // World-space angle of the beacon
-        let worldAngle = headingAtPlacement + beaconBearingDegrees
+        var bearingToBeacon = Double(worldBearingOfBeacon)
+        if let beaconCoord = beaconCoordinate,
+           let userCoord = LocationManager.shared.currentCoordinate {
+            let rawGPSBearing = Self.bearing(from: userCoord, to: beaconCoord)
 
-        // How much the user has turned since placement
-        let relativeAngle = worldAngle - fusedHeadingDegrees
+            // Smooth the GPS bearing heavily to kill jitter from GPS noise
+            smoothedGPSBearing = Self.circularEMA(
+                current: smoothedGPSBearing,
+                target: Float(rawGPSBearing),
+                alpha: 0.08
+            )
+            bearingToBeacon = Double(smoothedGPSBearing)
 
-        // Convert to radians for 3D positioning
-        let rad = relativeAngle * Float.pi / 180
-        let dist: Float = 4.0
+            let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+            let beaconLoc = CLLocation(latitude: beaconCoord.latitude, longitude: beaconCoord.longitude)
+            let rawDist = Float(userLoc.distance(from: beaconLoc))
+            // Smooth distance too
+            beaconDistanceMeters += (rawDist - beaconDistanceMeters) * 0.1
 
-        // Place source in listener-relative coordinates:
-        // +x = right ear, -x = left ear, -z = forward
-        shrineNode?.position = AVAudio3DPoint(
-            x: sinf(rad) * dist,
-            y: 0,
-            z: -cosf(rad) * dist
+            if beaconDistanceMeters < arrivalThresholdMeters {
+                clearBeacon()
+                AudioOrchestrator.shared.enqueue("You've arrived.", priority: .hazard)
+                return
+            }
+        }
+
+        let rawRelative = Self.wrapAngle(Float(bearingToBeacon) - fusedHeadingDegrees)
+
+        // Heavy smoothing on the published angle for stable UI (Pokémon GO feel)
+        relativeBeaconAngle = Self.circularEMA(
+            current: relativeBeaconAngle,
+            target: rawRelative,
+            alpha: 0.12
         )
+
+        // Audio uses the smoothed value too for consistent L/R panning
+        let rad = relativeBeaconAngle * Float.pi / 180
+        let audioDist: Float = 4.0
+        let x = sinf(rad) * audioDist
+        let z = -cosf(rad) * audioDist
+
+        shrineNode?.position = AVAudio3DPoint(x: x, y: 0, z: z)
+
+        posLogCount += 1
+        if posLogCount % 120 == 1 {
+            let gpsMode = beaconCoordinate != nil ? "GPS" : "compass"
+            print("[ShrinePos] [\(gpsMode)] heading=\(String(format: "%.0f", fusedHeadingDegrees))° bearing=\(String(format: "%.0f", bearingToBeacon))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m")
+        }
     }
 
     // MARK: - Audio graph
@@ -381,6 +448,11 @@ final class SpatialAudioEngine: ObservableObject {
         }
         avEngine.attach(node)
         avEngine.connect(node, to: environment, format: mono)
+        if #available(iOS 15, *) {
+            node.renderingAlgorithm = .HRTFHQ
+        } else {
+            node.renderingAlgorithm = .HRTF
+        }
         node.position = AVAudio3DPoint(x: 0, y: 0, z: -4)
         shrineNode = node
 
@@ -404,17 +476,24 @@ final class SpatialAudioEngine: ObservableObject {
             isEnabled = false
             return
         }
+        LocationManager.shared.requestPermissionAndStart()
+        fusedHeadingDegrees = Float(LocationManager.shared.currentHeading)
         startMotionTracking()
         haptics.start()
-        print("[SpatialAudio] Started — source-movement spatial + IMU + depth rotation")
+        print("[SpatialAudio] Started — compass + gyro fusion, heading=\(String(format: "%.0f", fusedHeadingDegrees))°")
     }
 
     private func configureSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .measurement,
-                                    options: [.mixWithOthers, .allowBluetooth])
+            try session.setCategory(
+                .playAndRecord,
+                mode: .default,
+                options: [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker]
+            )
             try session.setActive(true, options: .notifyOthersOnDeactivation)
+            let route = session.currentRoute.outputs.map { "\($0.portName) (\($0.portType.rawValue))" }
+            print("[SpatialAudio] Session active — outputs: \(route)")
         } catch {
             print("[SpatialAudio] Session configure failed: \(error)")
         }
@@ -423,6 +502,7 @@ final class SpatialAudioEngine: ObservableObject {
     private func stopEngine() {
         shrinePing.targetVolume = 0
         beaconActive = false
+        beaconCoordinate = nil
         activePath = nil
         rawPaths = []
         depthProfile = []
@@ -434,9 +514,8 @@ final class SpatialAudioEngine: ObservableObject {
             self?.avEngine.stop()
         }
         motion.stopDeviceMotionUpdates()
+        prevGyroYaw = .nan
         pathFinder.reset()
-        depthRotation.reset()
-        depthYawAccum = 0
         print("[SpatialAudio] Stopped")
     }
 
@@ -495,21 +574,50 @@ final class SpatialAudioEngine: ObservableObject {
         }
     }
 
-    /// Current device heading in radians (from CMAttitude.yaw).
-    private(set) var currentHeading: Float = 0
+    private var motionLogCount = 0
 
-    /// IMU updates at 60 Hz. Each update moves the source node.
+    /// Complementary filter: gyro deltas at 60 Hz for smooth tracking,
+    /// magnetometer compass as the absolute anchor to prevent drift.
     private func startMotionTracking() {
-        guard motion.isDeviceMotionAvailable else { return }
+        guard motion.isDeviceMotionAvailable else {
+            print("[SpatialAudio] DeviceMotion NOT available — falling back to compass only")
+            return
+        }
         motion.deviceMotionUpdateInterval = 1.0 / 60
         motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
             guard let self, let att = data?.attitude else { return }
-            self.currentHeading = Float(att.yaw)
-            self.imuYawDegrees = Float(att.yaw * 180.0 / .pi)
-            // Update fused heading (depth correction applied in applyPerceptionFrame)
-            self.fusedHeadingDegrees = self.imuYawDegrees + self.depthYawAccum * 0.15
-            // Move source node to match new head orientation
+
+            // 1. Compute gyro delta (frame-to-frame change)
+            let gyroYaw = att.yaw
+            if !self.prevGyroYaw.isNaN {
+                var delta = gyroYaw - self.prevGyroYaw
+                if delta > .pi { delta -= 2 * .pi }
+                if delta < -.pi { delta += 2 * .pi }
+                // Gyro yaw increases CCW; compass increases CW → negate
+                let deltaDeg = Float(-delta * 180.0 / .pi)
+                self.fusedHeadingDegrees += deltaDeg
+            }
+            self.prevGyroYaw = gyroYaw
+
+            // 2. Gently pull toward compass to prevent long-term drift.
+            // Low alpha (0.02) keeps the gyro's smoothness while the
+            // compass prevents accumulated drift over minutes.
+            let compassHeading = Float(LocationManager.shared.currentHeading)
+            if compassHeading > 0 {
+                let diff = Self.wrapAngle(compassHeading - self.fusedHeadingDegrees)
+                self.fusedHeadingDegrees += diff * 0.02
+            }
+            self.fusedHeadingDegrees = Self.wrapAngle360(self.fusedHeadingDegrees)
+
+            // 3. Move the shrine ping source node
             self.updateShrineNodePosition()
+
+            self.motionLogCount += 1
+            if self.motionLogCount % 120 == 1 {
+                let compass = LocationManager.shared.currentHeading
+                print("[Heading] fused=\(String(format: "%.0f", self.fusedHeadingDegrees))° compass=\(String(format: "%.0f", compass))° beacon=\(self.beaconActive) rel=\(String(format: "%.1f", self.relativeBeaconAngle))°")
+            }
         }
+        print("[SpatialAudio] Compass + gyro fusion started (60 Hz)")
     }
 }

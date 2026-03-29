@@ -45,9 +45,10 @@ class ToolCallRouter {
         }
       } else if callName == "set_ping" {
         let bearing = (call.args["bearing"] as? NSNumber)?.floatValue ?? 0
+        let distance = (call.args["distance_meters"] as? NSNumber)?.floatValue ?? 10
         if let engine = audioEngine {
-          engine.setBeaconBearing(bearing)
-          result = .success("Ping beacon placed at \(bearing)° from your current facing direction.")
+          engine.setBeaconBearing(bearing, distanceMeters: distance)
+          result = .success("Ping beacon placed \(distance)m away at \(bearing)° from your current facing. It will auto-clear when you arrive.")
         } else {
           result = .failure("Spatial audio engine is not available.")
         }

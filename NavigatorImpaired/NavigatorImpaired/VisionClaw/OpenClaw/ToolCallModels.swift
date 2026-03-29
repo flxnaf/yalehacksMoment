@@ -106,13 +106,17 @@ enum ToolDeclarations {
 
   static let setPing: [String: Any] = [
     "name": "set_ping",
-    "description": "Place a spatial audio ping beacon at a direction relative to the user. The ping sounds like a Zelda shrine detector — a resonant chime that the user hears from that direction in 3D. Use when the user says things like 'I want to reach the end of the hall', 'ping that direction', 'guide me there', etc. The bearing is relative to where the user is currently facing: 0 = straight ahead, -90 = left, +90 = right, 180 = behind.",
+    "description": "Place a spatial audio ping beacon at a direction and distance from the user. The ping sounds like a Zelda shrine detector chime that the user hears from that direction in 3D audio. It is anchored to a GPS coordinate so it stays fixed in the real world. When the user walks close enough, it auto-clears. Use when the user says things like 'I want to reach the end of the hall', 'ping that direction', 'guide me 10 meters ahead', etc. Always ask or estimate the distance.",
     "parameters": [
       "type": "object",
       "properties": [
         "bearing": [
           "type": "number",
           "description": "Direction in degrees relative to user's current facing. 0 = ahead, -90 = left, +90 = right, 180 = behind."
+        ],
+        "distance_meters": [
+          "type": "number",
+          "description": "Distance to the beacon in meters. Ask the user if unclear. Default 10. Examples: end of hall ~20m, across the room ~5m, nearby door ~3m."
         ]
       ],
       "required": ["bearing"]
