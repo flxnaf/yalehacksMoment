@@ -614,7 +614,7 @@ final class SpatialAudioEngine: ObservableObject {
             let gpsMode = beaconCoordinate != nil ? "GPS" : "compass"
             let speed = LocationManager.shared.currentSpeed
             let locked = isGPSBearingLocked ? "LOCKED" : "live"
-            print("[ShrinePos] [\(gpsMode)|\(locked)] heading=\(String(format: "%.0f", fusedHeadingDegrees))° bearing=\(String(format: "%.0f", bearingToBeacon))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m speed=\(String(format: "%.1f", speed))m/s onTarget=\(onTarget)")
+            print("[ShrinePos] [\(gpsMode)|\(locked)] heading=\(String(format: "%.0f", fusedHeadingDegrees))° bearing=\(String(format: "%.0f", bearingToBeacon))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m speed=\(String(format: "%.1f", speed))m/s zone=\(inZone) playing=\(shoreAmbient.isPlaying)")
         }
     }
 
