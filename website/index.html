@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Moment — Navigation for the Visually Impaired</title>
+  <title>Moment — AI Navigation for the Visually Impaired</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -16,15 +16,16 @@
     <div class="nav-inner">
       <a href="#" class="nav-logo">
         <div class="logo-mark">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
         </div>
         Moment
       </a>
       <div class="nav-links">
-        <a href="#how-it-works">How it works</a>
+        <a href="#how-it-works">Pipeline</a>
         <a href="#features">Features</a>
         <a href="#architecture">Architecture</a>
         <a href="#hardware">Hardware</a>
+        <a href="#stack">Stack</a>
       </div>
     </div>
   </nav>
@@ -47,8 +48,8 @@
       </h1>
       <p class="hero-subtitle">
         Moment is a real-time AI navigation system for blind and visually impaired people.
-        Spatial audio, depth sensing, Gemini Vision, and Meta Ray-Ban glasses — all fused
-        into a single, always-on layer of perception.
+        On-device depth inference, 3D spatial audio, Gemini 2.5 Live vision, and Meta Ray-Ban
+        glasses — fused into a continuous layer of perception.
       </p>
       <div class="hero-cta">
         <a href="#how-it-works" class="btn btn-primary">See how it works</a>
@@ -56,12 +57,16 @@
       </div>
       <div class="hero-devices">
         <div class="device-pill">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
           iPhone
         </div>
         <div class="device-pill">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
           Meta Ray-Ban
+        </div>
+        <div class="device-pill">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          Always-on
         </div>
       </div>
     </div>
@@ -100,75 +105,116 @@
     </a>
   </section>
 
+  <!-- METRICS STRIP -->
+  <div class="metrics-strip">
+    <div class="metrics-inner">
+      <div class="metric-item">
+        <div class="metric-val">43ms</div>
+        <div class="metric-label">Depth inference (ANE)</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-item">
+        <div class="metric-val">30fps</div>
+        <div class="metric-label">Camera pipeline</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-item">
+        <div class="metric-val">448²</div>
+        <div class="metric-label">Depth resolution</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-item">
+        <div class="metric-val">~1.3s</div>
+        <div class="metric-label">Gemini round-trip</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-item">
+        <div class="metric-val">10Hz</div>
+        <div class="metric-label">Navigation tick rate</div>
+      </div>
+      <div class="metric-divider"></div>
+      <div class="metric-item">
+        <div class="metric-val">0</div>
+        <div class="metric-label">Cloud req'd for core loop</div>
+      </div>
+    </div>
+  </div>
+
   <!-- HOW IT WORKS -->
   <section class="section" id="how-it-works">
     <div class="container">
-      <div class="section-label">How it works</div>
-      <h2 class="section-title">Three layers of perception,<br/>always running.</h2>
+      <div class="section-label">Processing pipeline</div>
+      <h2 class="section-title">Every frame through<br/>four stages.</h2>
       <p class="section-subtitle">
-        Every camera frame passes through a pipeline that combines machine learning depth,
-        computer vision, and spatial audio to build a continuous picture of the environment.
+        Camera frames flow through a fully asynchronous pipeline — each stage is rate-limited
+        and isolated so no component can stall the others.
       </p>
 
       <div class="pipeline">
-        <div class="pipeline-step" data-step="1">
+        <div class="pipeline-step">
           <div class="step-number step-number-active">01</div>
           <div class="step-content">
-            <h3>Camera Input</h3>
-            <p>Live frames arrive at up to 30fps from either the iPhone camera or Meta Ray-Ban glasses via the MWDAT SDK and WebRTC stream.</p>
+            <h3>Camera Capture</h3>
+            <p>Live frames at 30fps from either the iPhone AVCaptureSession or Meta Ray-Ban glasses via MWDAT SDK and WebRTC. Frames are timestamped and routed to both the depth engine and Gemini Live simultaneously.</p>
           </div>
-          <div class="step-arrow">→</div>
+          <div class="step-arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </div>
         </div>
-        <div class="pipeline-step" data-step="2">
+        <div class="pipeline-step">
           <div class="step-number step-number-active">02</div>
           <div class="step-content">
-            <h3>Depth Inference</h3>
-            <p>DepthAnything V2 (CoreML, ANE-accelerated) produces a 448×448 monocular depth map in ~43ms per frame — 0 = far, 1 = near.</p>
+            <h3>Depth + Vision</h3>
+            <p>DepthAnything V2 (CoreML, ANE-accelerated) produces a 448×448 monocular depth map per frame. Apple Vision runs person detection at 5Hz and scene classification at 1Hz in parallel, cross-referenced with depth values per bounding box.</p>
           </div>
-          <div class="step-arrow">→</div>
+          <div class="step-arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </div>
         </div>
-        <div class="pipeline-step" data-step="3">
+        <div class="pipeline-step">
           <div class="step-number step-number-active">03</div>
           <div class="step-content">
-            <h3>Spatial Audio</h3>
-            <p>The depth map feeds the SpatialAudioEngine — obstacle pings, a 3D shrine beacon, and Gemini voice all play through HRTF spatial audio.</p>
+            <h3>Obstacle Analysis</h3>
+            <p>ObstacleAnalyzer samples depth in left/center/right zones using robust 5th-percentile values. PathFinder scans a 24-column horizontal depth profile for walkable gaps. NavigationAudioPolicy fuses urgency with hysteresis filtering.</p>
           </div>
-          <div class="step-arrow">→</div>
+          <div class="step-arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </div>
         </div>
-        <div class="pipeline-step" data-step="4">
+        <div class="pipeline-step">
           <div class="step-number step-number-active">04</div>
           <div class="step-content">
-            <h3>Gemini Live</h3>
-            <p>A persistent WebSocket to Gemini 2.5 Flash handles voice conversation, obstacle descriptions, navigation commands, and tool calls — all in real time.</p>
+            <h3>Audio + Guidance</h3>
+            <p>SpatialAudioEngine places obstacle pings and the navigation beacon in 3D HRTF space anchored to ARKit world coordinates. Priority-queued speech (hazard > navigation > ambient) delivers ElevenLabs TTS or Gemini Native Audio to the user.</p>
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- FEATURES GRID -->
+  <!-- FEATURES -->
   <section class="section section-dark" id="features">
     <div class="container">
       <div class="section-header-centered">
         <div class="section-label">Features</div>
-        <h2 class="section-title">Every sense reimagined<br/>as sound.</h2>
-        <p class="section-subtitle-centered">Eight systems working together — on device, in real time, with no internet required for the core navigation loop.</p>
+        <h2 class="section-title">Twelve systems,<br/>one continuous experience.</h2>
+        <p class="section-subtitle-centered">Every component runs concurrently — on device, with no internet required for the core navigation loop.</p>
       </div>
 
-      <!-- Row 1: 2 wide hero cards -->
+      <!-- Row 1: 2 hero cards -->
       <div class="features-row features-row-2">
         <div class="feature-card feature-hero">
           <div class="feature-hero-top">
             <div class="feature-icon-lg">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
             </div>
-            <div class="feature-hero-label">Core feature</div>
+            <div class="feature-hero-label">Core navigation</div>
           </div>
           <h3>Shrine Ping Beacon</h3>
-          <p>Ask Gemini to set a ping anywhere in space — "guide me to the counter." A Zelda-style chime locks to a real GPS coordinate and plays from that exact direction in 3D HRTF audio. Walk toward it; it auto-clears when you arrive.</p>
+          <p>Ask Gemini to guide you anywhere — "take me to the counter." A spatial audio beacon locks to a real GPS coordinate and ARKit world anchor. A Zelda-style chime pair (C6 + E6) plays from that exact 3D direction via HRTF. Gyro + compass fusion keeps "12 o'clock" pointing straight ahead regardless of rotation. Auto-clears on arrival within 3m.</p>
           <div class="feature-tags">
-            <span class="tag tag-accent">HRTF Spatial</span>
-            <span class="tag tag-accent">GPS-anchored</span>
+            <span class="tag tag-accent">HRTF · AVAudioEnvironmentNode</span>
+            <span class="tag tag-accent">GPS + ARKit anchor</span>
             <span class="tag tag-accent">Gyro-relative</span>
           </div>
         </div>
@@ -176,118 +222,133 @@
         <div class="feature-card feature-hero">
           <div class="feature-hero-top">
             <div class="feature-icon-lg">
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6-10l6-3m0 13l5.447 2.724A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 10"/></svg>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21 3 6"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
             </div>
-            <div class="feature-hero-label">Core feature</div>
+            <div class="feature-hero-label">Core navigation</div>
           </div>
           <h3>Turn-by-Turn Navigation</h3>
-          <p>Say "take me to the library" — Gemini calls the <code>navigate_to</code> tool, Google Maps computes the pedestrian route, and the shrine beacon guides you waypoint-by-waypoint with spatial audio and live obstacle scanning.</p>
+          <p>Say "take me to the library" — Gemini calls the <code>navigate_to</code> tool, Google Maps Directions API computes a pedestrian route, and FusedNavigator guides you waypoint-by-waypoint at 10Hz. Obstacle urgency from depth analysis feeds directly into bearing decisions — it will tell you to detour before you reach something.</p>
           <div class="feature-tags">
-            <span class="tag tag-accent">Google Maps API</span>
-            <span class="tag tag-accent">GPS Fused</span>
-            <span class="tag tag-accent">CoreLocation</span>
+            <span class="tag tag-accent">Google Maps Directions API</span>
+            <span class="tag tag-accent">GPS + compass EMA</span>
+            <span class="tag tag-accent">10Hz fusion loop</span>
           </div>
         </div>
       </div>
 
-      <!-- Row 2: 4 equal cards -->
-      <div class="features-row features-row-4">
+      <!-- Row 2: 3 cards -->
+      <div class="features-row features-row-3">
         <div class="feature-card feature-sm">
           <div class="feature-icon-sm">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 18.5A2.5 2.5 0 0 1 9.5 16v-4a2.5 2.5 0 0 1 5 0v4a2.5 2.5 0 0 1-2.5 2.5z"/><path d="M19 11a7 7 0 0 1-14 0M12 22v-3.5"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
           </div>
-          <h3>Gemini Live Voice</h3>
-          <p>Persistent real-time WebSocket to Gemini 2.5 Flash Native Audio. Natural conversation — ask where things are, get guidance, control the app.</p>
+          <h3>Gemini 2.5 Live Voice</h3>
+          <p>Persistent WebSocket to Gemini 2.5 Flash Native Audio Preview. Bidirectional PCM audio (16kHz mic, 24kHz output) + JPEG video every second. Natural voice conversation with full tool-call routing — set beacons, start navigation, ask what's ahead.</p>
           <div class="feature-tags">
-            <span class="tag">WebSocket</span>
-            <span class="tag">Tool Calls</span>
+            <span class="tag">WebSocket · 16kHz/24kHz</span>
+            <span class="tag">Tool routing</span>
           </div>
         </div>
 
         <div class="feature-card feature-sm">
           <div class="feature-icon-sm">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+          <h3>Proactive Obstacle Scans</h3>
+          <p>When a beacon is active or depth urgency exceeds 0.25, Gemini automatically scans the live camera and announces what's ahead: "Chair at 12 o'clock. Wall to the right." 5-second cooldown with beacon, 8-second otherwise. Never fires mid-sentence.</p>
+          <div class="feature-tags">
+            <span class="tag">Urgency-gated</span>
+            <span class="tag">Adaptive cooldown</span>
+          </div>
+        </div>
+
+        <div class="feature-card feature-sm">
+          <div class="feature-icon-sm">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
           </div>
           <h3>Parking Sensor Audio</h3>
-          <p>Silent when clear. Escalating beeps as objects approach within 2m. Three zones: safe, warning, danger — no noise pollution when walking freely.</p>
+          <p>Silent when the path is clear. Escalating DSP-synthesized beeps as objects enter a 2m danger zone. Left, center, and right zones each have independent tone frequency, rate, and spatial pan — no noise pollution when walking freely.</p>
           <div class="feature-tags">
-            <span class="tag">AVAudioEngine</span>
-            <span class="tag">DSP</span>
-          </div>
-        </div>
-
-        <div class="feature-card feature-sm">
-          <div class="feature-icon-sm">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-          </div>
-          <h3>Proactive Obstacle Scan</h3>
-          <p>Every 5 seconds with a beacon active, Gemini scans the live camera and announces what's ahead: "Chair at 12 o'clock. Wall to the right."</p>
-          <div class="feature-tags">
-            <span class="tag">Auto-triggered</span>
-            <span class="tag">Depth-gated</span>
-          </div>
-        </div>
-
-        <div class="feature-card feature-sm">
-          <div class="feature-icon-sm">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          </div>
-          <h3>Hold-to-Ask</h3>
-          <p>Hold the mic button and ask anything — "where is the door?" Speech is transcribed on-device, Gemini Vision answers with clock directions and distance.</p>
-          <div class="feature-tags">
-            <span class="tag">SFSpeechRecognizer</span>
-            <span class="tag">On-device</span>
+            <span class="tag">AVAudioEngine DSP</span>
+            <span class="tag">Zone-independent</span>
           </div>
         </div>
       </div>
 
-      <!-- Row 3: 4 equal cards -->
-      <div class="features-row features-row-4">
+      <!-- Row 3: 3 cards -->
+      <div class="features-row features-row-3">
         <div class="feature-card feature-sm">
           <div class="feature-icon-sm">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-          </div>
-          <h3>Object Detection</h3>
-          <p>VNClassifyImageRequest scans left, center, right zones per frame. Depth-gated to 2m. "Stairs ahead." "Chair left." One focused alert per second.</p>
-          <div class="feature-tags">
-            <span class="tag">Vision.framework</span>
-            <span class="tag">On-device</span>
-          </div>
-        </div>
-
-        <div class="feature-card feature-sm">
-          <div class="feature-icon-sm">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          </div>
-          <h3>Fall Detection + SOS</h3>
-          <p>On-device CoreMotion model detects falls and auto-alerts a guardian contact with a glasses-camera photo and GPS location via email.</p>
-          <div class="feature-tags">
-            <span class="tag">CoreMotion</span>
-            <span class="tag">SendGrid</span>
-          </div>
-        </div>
-
-        <div class="feature-card feature-sm">
-          <div class="feature-icon-sm">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15M14.25 3.104c.251.023.501.05.75.082M19.8 15l-1.57.393A48.43 48.43 0 0112 16.5a48.43 48.43 0 01-6.23-.607L4.2 15m15.6 0-3.176-9.535"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/><path d="M4 9H2M4 15H2M20 9h2M20 15h2"/></svg>
           </div>
           <h3>Monocular Depth</h3>
-          <p>DepthAnything V2 runs fully on-device at ~43ms per frame on Apple's Neural Engine — no cloud, no latency, no privacy concerns.</p>
+          <p>DepthAnything V2 Small runs fully on Apple's Neural Engine — no cloud, no privacy concerns. Two-phase loading: GPU (5s cold start) then hot-swap to ANE once compiled. Turbo colormap LUT via Accelerate's vDSP_vfixu8. ~43ms per frame.</p>
           <div class="feature-tags">
-            <span class="tag">CoreML</span>
-            <span class="tag">ANE · 43ms</span>
+            <span class="tag">CoreML · ANE</span>
+            <span class="tag">Hot-swap backends</span>
           </div>
         </div>
 
         <div class="feature-card feature-sm">
           <div class="feature-icon-sm">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 18L18 6M6 6l12 12"/><circle cx="12" cy="12" r="10"/></svg>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           </div>
-          <h3>Room Detection</h3>
-          <p>Depth profile analysis detects corridor entries, doorways, and open-space transitions — announces "entering corridor" or "open room ahead" automatically.</p>
+          <h3>Person Detection</h3>
+          <p>VNDetectHumanRectanglesRequest at 5Hz, cross-referenced with depth (80th-percentile per bbox). SmartAssistant announces clock-face direction. Major hazard threshold (depth > 0.956, ~0.8m) bypasses cooldown and interrupts all other speech immediately.</p>
+          <div class="feature-tags">
+            <span class="tag">Vision.framework</span>
+            <span class="tag">Depth-fused</span>
+          </div>
+        </div>
+
+        <div class="feature-card feature-sm">
+          <div class="feature-icon-sm">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h18M3 6l9-3 9 3M3 18l9 3 9-3"/></svg>
+          </div>
+          <h3>Walkable Path Detection</h3>
+          <p>PathFinder scans a 24-column depth profile across the eye-level image band. Floor pixels are excluded via vertical gradient analysis. ClearPath objects score by width × (1 − avgDepth) and map directly to haptic and spatial audio cues.</p>
+          <div class="feature-tags">
+            <span class="tag">24-column profile</span>
+            <span class="tag">Floor-filtered · EMA</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 4: 3 cards -->
+      <div class="features-row features-row-3">
+        <div class="feature-card feature-sm">
+          <div class="feature-icon-sm">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          </div>
+          <h3>Fall Detection + SOS</h3>
+          <p>Three-phase CoreMotion state machine: freefall (&lt;0.55g for ≥0.28s) → impact (&gt;2.2g within 0.85s) → stationary confirmation. 10-second countdown with voice prompts. Guardian alerted via email (SendGrid), SMS, and WhatsApp (OpenClaw) with GPS + photo.</p>
+          <div class="feature-tags">
+            <span class="tag">CoreMotion 100Hz</span>
+            <span class="tag">SendGrid · WhatsApp</span>
+          </div>
+        </div>
+
+        <div class="feature-card feature-sm">
+          <div class="feature-icon-sm">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+          </div>
+          <h3>Priority Speech Engine</h3>
+          <p>AudioOrchestrator manages a four-level queue: ambient → social → navigation → hazard. ElevenLabs TTS (voice "George", eleven_turbo_v2_5) for hazard priority with 12 pre-warmed phrases cached in memory at startup. Falls back to AVSpeechSynthesizer. Auto-resamples format mismatches.</p>
           <div class="feature-tags">
             <span class="tag">ElevenLabs TTS</span>
-            <span class="tag">Depth profile</span>
+            <span class="tag">Pre-warmed cache</span>
+          </div>
+        </div>
+
+        <div class="feature-card feature-sm">
+          <div class="feature-icon-sm">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/><path d="M1 8h2M1 12h2M1 16h2M21 8h2M21 12h2M21 16h2"/></svg>
+          </div>
+          <h3>Haptic Navigation</h3>
+          <p>NavigationHapticEngine encodes walkable path direction and clearance distance into CoreHaptics patterns. Urgency-scaled feedback — light taps for clear paths, sharp pulses when an obstacle is immediately ahead. Operates independently of audio for deaf-blind users.</p>
+          <div class="feature-tags">
+            <span class="tag">CoreHaptics</span>
+            <span class="tag">Urgency-scaled</span>
           </div>
         </div>
       </div>
@@ -301,8 +362,8 @@
       <div class="section-label">Architecture</div>
       <h2 class="section-title">How the components<br/>connect.</h2>
       <p class="section-subtitle">
-        Every major system is isolated, asynchronous, and rate-limited so no single
-        component can stall the others.
+        Each layer is fully asynchronous. Depth inference, vision detection, Gemini audio,
+        and navigation all run on independent queues — no component blocks another.
       </p>
 
       <div class="arch-diagram">
@@ -312,24 +373,38 @@
           <div class="arch-nodes">
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 10l4.553-2.069A1 1 0 0121 8.86V15.14a1 1 0 01-1.447.93L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M15 10l4.553-2.069A1 1 0 0121 8.86V15.14a1 1 0 01-1.447.93L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/></svg>
               </div>
               <div class="node-name">iPhone Camera</div>
               <div class="node-detail">PhoneCameraManager<br/>30fps AVCaptureSession</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path d="M2 12h2M20 12h2"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/><path d="M2 12h2M20 12h2"/></svg>
               </div>
               <div class="node-name">Ray-Ban Glasses</div>
               <div class="node-detail">GlassesStreamManager<br/>MWDAT SDK + WebRTC</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 18.5A2.5 2.5 0 0 1 9.5 16v-4a2.5 2.5 0 0 1 5 0v4a2.5 2.5 0 0 1-2.5 2.5z"/><path d="M19 11a7 7 0 0 1-14 0M12 22v-3.5"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 18.5A2.5 2.5 0 0 1 9.5 16v-4a2.5 2.5 0 0 1 5 0v4a2.5 2.5 0 0 1-2.5 2.5z"/><path d="M19 11a7 7 0 0 1-14 0M12 22v-3.5"/></svg>
               </div>
               <div class="node-name">Microphone</div>
               <div class="node-detail">AudioManager<br/>16kHz PCM → Gemini</div>
+            </div>
+            <div class="arch-node">
+              <div class="node-icon-wrap">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              </div>
+              <div class="node-name">GPS + Compass</div>
+              <div class="node-detail">LocationManager<br/>EMA-smoothed heading</div>
+            </div>
+            <div class="arch-node">
+              <div class="node-icon-wrap">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+              </div>
+              <div class="node-name">Accelerometer</div>
+              <div class="node-detail">CMMotionManager<br/>100Hz fall detection</div>
             </div>
           </div>
         </div>
@@ -339,35 +414,42 @@
         </div>
 
         <div class="arch-layer arch-layer-processing">
-          <div class="arch-layer-label">Processing</div>
+          <div class="arch-layer-label">Perception</div>
           <div class="arch-nodes">
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/><path d="M4 9H2M4 15H2M20 9h2M20 15h2"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/><path d="M4 9H2M4 15H2M20 9h2M20 15h2"/></svg>
               </div>
               <div class="node-name">DepthInferenceEngine</div>
               <div class="node-detail">DepthAnything V2<br/>CoreML / ANE · 43ms</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
               </div>
               <div class="node-name">VisionDetector</div>
-              <div class="node-detail">VNDetectHuman<br/>VNClassifyImage<br/>Saliency gating</div>
+              <div class="node-detail">VNDetectHuman 5Hz<br/>VNClassifyImage 1Hz<br/>Depth cross-ref</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
               </div>
               <div class="node-name">ObjectDetector</div>
-              <div class="node-detail">Zone-crop classify<br/>Depth-gated · 1Hz</div>
+              <div class="node-detail">Hazard catalogue<br/>Zone-crop · 1Hz</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h18M3 6l9-3 9 3M3 18l9 3 9-3"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 12h18M3 6l9-3 9 3M3 18l9 3 9-3"/></svg>
               </div>
               <div class="node-name">PathFinder</div>
-              <div class="node-detail">Clear path detection<br/>WorldObstacleMap bins</div>
+              <div class="node-detail">24-col depth profile<br/>Floor-filtered · EMA</div>
+            </div>
+            <div class="arch-node">
+              <div class="node-icon-wrap">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+              </div>
+              <div class="node-name">ObstacleAnalyzer</div>
+              <div class="node-detail">3-zone 5th-pct depth<br/>Urgency 0–1 score</div>
             </div>
           </div>
         </div>
@@ -381,31 +463,31 @@
           <div class="arch-nodes">
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+              </div>
+              <div class="node-name">Gemini 2.5 Live</div>
+              <div class="node-detail">WebSocket · Flash Preview<br/>Tool calls · Video + Audio<br/>Obstacle scan · ~1.3s</div>
+            </div>
+            <div class="arch-node">
+              <div class="node-icon-wrap">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
               </div>
               <div class="node-name">NavigationAudioPolicy</div>
-              <div class="node-detail">Urgency EMA<br/>Hysteresis · polyphony caps</div>
+              <div class="node-detail">Urgency EMA<br/>Hysteresis · poly caps</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-              </div>
-              <div class="node-name">SpatialAudioEngine</div>
-              <div class="node-detail">AVAudioEnvironmentNode<br/>HRTF · 8-voice pool<br/>Gyro-anchored beacon</div>
-            </div>
-            <div class="arch-node">
-              <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-              </div>
-              <div class="node-name">Gemini Live</div>
-              <div class="node-detail">WebSocket · 2.5 Flash<br/>Tool calls · Video stream<br/>Obstacle scan · ~1.3s latency</div>
-            </div>
-            <div class="arch-node">
-              <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21 3 6"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21 3 6"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
               </div>
               <div class="node-name">NavigationController</div>
-              <div class="node-detail">Google Maps routes<br/>FusedNavigator<br/>GPS + gyro fusion</div>
+              <div class="node-detail">Google Maps routes<br/>FusedNavigator 10Hz<br/>GPS + gyro fusion</div>
+            </div>
+            <div class="arch-node">
+              <div class="node-icon-wrap">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <div class="node-name">FallDetector</div>
+              <div class="node-detail">3-phase state machine<br/>CoreMotion 100Hz</div>
             </div>
           </div>
         </div>
@@ -419,51 +501,48 @@
           <div class="arch-nodes">
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="18" r="3"/><circle cx="19" cy="15" r="3"/><path d="M11 18V7l10-3v3"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
               </div>
-              <div class="node-name">3D Spatial Audio</div>
-              <div class="node-detail">Obstacle pings<br/>Shrine beacon chime<br/>Shore ambient sound</div>
+              <div class="node-name">SpatialAudioEngine</div>
+              <div class="node-detail">HRTF · 8-voice pool<br/>Beacon + obstacle pings<br/>Shore ambient</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
               </div>
-              <div class="node-name">Voice Output</div>
-              <div class="node-detail">Gemini Native Audio<br/>AVSpeechSynthesizer<br/>ElevenLabs TTS</div>
+              <div class="node-name">AudioOrchestrator</div>
+              <div class="node-detail">Priority queue<br/>ElevenLabs + AVSpeech<br/>Pre-warmed cache</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/><path d="M1 8h2M1 12h2M1 16h2M21 8h2M21 12h2M21 16h2"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/><path d="M1 8h2M1 12h2M1 16h2M21 8h2M21 12h2M21 16h2"/></svg>
               </div>
-              <div class="node-name">Haptics</div>
-              <div class="node-detail">CoreHaptics<br/>Urgency-scaled<br/>NavigationHapticEngine</div>
+              <div class="node-name">HapticEngine</div>
+              <div class="node-detail">CoreHaptics<br/>Urgency-scaled patterns<br/>Path direction</div>
             </div>
             <div class="arch-node">
               <div class="node-icon-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
               </div>
-              <div class="node-name">Guardian Alert</div>
-              <div class="node-detail">Fall → photo capture<br/>GPS + email via SendGrid</div>
+              <div class="node-name">GuardianAlert</div>
+              <div class="node-detail">Email · SMS · WhatsApp<br/>GPS + photo snapshot</div>
             </div>
           </div>
         </div>
+
       </div>
     </div>
   </section>
 
-  <!-- DEPTH SECTION -->
+  <!-- DEPTH DETAIL -->
   <section class="section section-dark">
     <div class="container">
       <div class="two-col">
         <div class="two-col-text">
-          <div class="section-label">Depth Perception</div>
-          <h2 class="section-title-sm">Seeing distance<br/>in real time.</h2>
-          <p>DepthAnything V2 runs entirely on-device — no cloud, no latency. Each frame is
-          resized to 448×448, passed through the model on Apple's Neural Engine, and produces
-          a full depth map in under 50ms.</p>
-          <p>The raw float map is normalized, colorized with a perceptual LUT using
-          Accelerate's vDSP, and rendered as an overlay the user or caregiver can see.
-          The same raw values drive all audio decisions.</p>
+          <div class="section-label">On-device depth</div>
+          <h2 class="section-title-sm">Seeing distance<br/>without cloud.</h2>
+          <p>DepthAnything V2 Small runs entirely on Apple's Neural Engine. Each frame is resized to 448×448, passed through the model, and produces a normalized depth map — 0 = far, 1 = near — in under 50ms on any modern iPhone.</p>
+          <p>The raw float map is colorized with a 256-entry Turbo LUT using Accelerate's vDSP_vfixu8 for a debug overlay. The same raw values drive every audio decision. The model hot-swaps between GPU and ANE backends without interrupting inference.</p>
           <div class="stats-row">
             <div class="stat-item">
               <div class="stat-val">43ms</div>
@@ -471,11 +550,11 @@
             </div>
             <div class="stat-item">
               <div class="stat-val">448²</div>
-              <div class="stat-label">Depth map resolution</div>
+              <div class="stat-label">Depth resolution</div>
             </div>
             <div class="stat-item">
               <div class="stat-val">30fps</div>
-              <div class="stat-label">Camera input</div>
+              <div class="stat-label">Camera throughput</div>
             </div>
           </div>
         </div>
@@ -510,15 +589,15 @@
       <div class="section-label">Hardware</div>
       <h2 class="section-title">Two ways to see.</h2>
       <p class="section-subtitle">
-        Moment runs identically on both platforms. The user picks whichever fits
-        their situation — glasses for hands-free use, phone when walking carefully.
+        Moment runs identically on both platforms. The system detects which source is active
+        and routes frames automatically — zero configuration required from the user.
       </p>
 
       <div class="hardware-grid">
         <div class="hardware-card">
           <div class="hardware-card-header">
             <div class="hardware-icon">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="5" y="2" width="14" height="20" rx="2"/><circle cx="12" cy="17" r="1"/></svg>
+              <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="5" y="2" width="14" height="20" rx="2"/><circle cx="12" cy="17" r="1"/></svg>
             </div>
             <div>
               <h3>iPhone</h3>
@@ -526,19 +605,20 @@
             </div>
           </div>
           <ul class="hardware-list">
-            <li><span class="li-dot li-green"></span>Wide-angle camera at 30fps</li>
-            <li><span class="li-dot li-green"></span>Apple Neural Engine for depth</li>
-            <li><span class="li-dot li-green"></span>CoreMotion for gyro heading</li>
-            <li><span class="li-dot li-green"></span>CoreHaptics for obstacle feedback</li>
-            <li><span class="li-dot li-green"></span>AirPods / headphone 3D audio</li>
-            <li><span class="li-dot li-yellow"></span>Must be held or mounted</li>
+            <li><span class="li-dot li-green"></span>Wide-angle camera · 30fps AVCaptureSession</li>
+            <li><span class="li-dot li-green"></span>Apple Neural Engine · DepthAnything V2</li>
+            <li><span class="li-dot li-green"></span>CoreMotion gyro + accelerometer (100Hz)</li>
+            <li><span class="li-dot li-green"></span>CoreHaptics urgency-scaled feedback</li>
+            <li><span class="li-dot li-green"></span>AirPods / headphone HRTF 3D audio</li>
+            <li><span class="li-dot li-green"></span>CoreLocation GPS + compass fusion</li>
+            <li><span class="li-dot li-yellow"></span>Must be held or chest-mounted</li>
           </ul>
         </div>
         <div class="hardware-card hardware-card-featured">
           <div class="hardware-card-badge">Hands-free</div>
           <div class="hardware-card-header">
             <div class="hardware-icon">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 12c0 0 4-6 10-6s10 6 10 6-4 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/><path d="M2 12h2M20 12h2"/></svg>
+              <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 12c0 0 4-6 10-6s10 6 10 6-4 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/><path d="M2 12h2M20 12h2"/></svg>
             </div>
             <div>
               <h3>Meta Ray-Ban</h3>
@@ -546,97 +626,21 @@
             </div>
           </div>
           <ul class="hardware-list">
-            <li><span class="li-dot li-green"></span>First-person camera view</li>
+            <li><span class="li-dot li-green"></span>First-person camera · MWDAT SDK + WebRTC</li>
             <li><span class="li-dot li-green"></span>Open-ear spatial audio speakers</li>
-            <li><span class="li-dot li-green"></span>Phone in pocket — audio only</li>
-            <li><span class="li-dot li-green"></span>MWDAT SDK + WebRTC streaming</li>
-            <li><span class="li-dot li-green"></span>Meta AI app registration</li>
-            <li><span class="li-dot li-yellow"></span>Requires companion iPhone</li>
+            <li><span class="li-dot li-green"></span>Phone stays in pocket — audio only</li>
+            <li><span class="li-dot li-green"></span>AutoDeviceSelector finds glasses automatically</li>
+            <li><span class="li-dot li-green"></span>Raw codec · medium resolution · 30fps</li>
+            <li><span class="li-dot li-green"></span>Meta AI OAuth registration via app</li>
+            <li><span class="li-dot li-yellow"></span>Requires companion iPhone for compute</li>
           </ul>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- TECH STACK -->
+  <!-- GEMINI DETAIL -->
   <section class="section section-dark">
-    <div class="container">
-      <div class="section-label">Tech Stack</div>
-      <h2 class="section-title">Built on Apple-native<br/>frameworks.</h2>
-
-      <div class="tech-grid">
-        <div class="tech-category">
-          <div class="tech-category-title">Machine Learning</div>
-          <div class="tech-pills">
-            <span class="tech-pill">CoreML</span>
-            <span class="tech-pill">DepthAnything V2</span>
-            <span class="tech-pill">Apple Neural Engine</span>
-            <span class="tech-pill">Vision.framework</span>
-            <span class="tech-pill">VNClassifyImageRequest</span>
-            <span class="tech-pill">VNDetectHumanRectangles</span>
-            <span class="tech-pill">VNGenerateSaliency</span>
-          </div>
-        </div>
-        <div class="tech-category">
-          <div class="tech-category-title">Audio</div>
-          <div class="tech-pills">
-            <span class="tech-pill">AVAudioEngine</span>
-            <span class="tech-pill">AVAudioEnvironmentNode</span>
-            <span class="tech-pill">HRTF Spatial Audio</span>
-            <span class="tech-pill">AVSpeechSynthesizer</span>
-            <span class="tech-pill">SFSpeechRecognizer</span>
-            <span class="tech-pill">ElevenLabs TTS</span>
-            <span class="tech-pill">DSP Oscillators</span>
-          </div>
-        </div>
-        <div class="tech-category">
-          <div class="tech-category-title">AI / Cloud</div>
-          <div class="tech-pills">
-            <span class="tech-pill">Gemini 2.5 Flash</span>
-            <span class="tech-pill">Gemini Live WebSocket</span>
-            <span class="tech-pill">Native Audio Preview</span>
-            <span class="tech-pill">Tool Calls</span>
-            <span class="tech-pill">Google Maps Routes API</span>
-            <span class="tech-pill">SendGrid Email</span>
-          </div>
-        </div>
-        <div class="tech-category">
-          <div class="tech-category-title">Sensors & Navigation</div>
-          <div class="tech-pills">
-            <span class="tech-pill">CoreLocation</span>
-            <span class="tech-pill">CoreMotion</span>
-            <span class="tech-pill">CMAttitude Gyroscope</span>
-            <span class="tech-pill">CLHeading Compass</span>
-            <span class="tech-pill">CoreHaptics</span>
-            <span class="tech-pill">GPS Fusion</span>
-          </div>
-        </div>
-        <div class="tech-category">
-          <div class="tech-category-title">Accelerate / Performance</div>
-          <div class="tech-pills">
-            <span class="tech-pill">Accelerate.framework</span>
-            <span class="tech-pill">vDSP_vsmul</span>
-            <span class="tech-pill">vDSP_vfixu8</span>
-            <span class="tech-pill">vImage LUT</span>
-            <span class="tech-pill">SIMD float operations</span>
-          </div>
-        </div>
-        <div class="tech-category">
-          <div class="tech-category-title">Connectivity</div>
-          <div class="tech-pills">
-            <span class="tech-pill">MWDAT SDK</span>
-            <span class="tech-pill">WebRTC</span>
-            <span class="tech-pill">WebSocket</span>
-            <span class="tech-pill">OpenClaw Bridge</span>
-            <span class="tech-pill">URLSession</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- AUDIO DETAIL -->
-  <section class="section">
     <div class="container">
       <div class="two-col two-col-reverse">
         <div class="two-col-visual">
@@ -647,22 +651,66 @@
               <div class="audio-ring ar-3"></div>
               <div class="audio-ring ar-4"></div>
               <div class="audio-center">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 18.5A2.5 2.5 0 0 1 9.5 16v-4a2.5 2.5 0 0 1 5 0v4a2.5 2.5 0 0 1-2.5 2.5z"/><path d="M19 11a7 7 0 0 1-14 0"/></svg>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
               </div>
             </div>
-            <div class="audio-labels">
-              <div class="audio-label al-12">12 o'clock</div>
-              <div class="audio-label al-3">3 o'clock</div>
-              <div class="audio-label al-6">6 o'clock</div>
-              <div class="audio-label al-9">9 o'clock</div>
+            <div class="gemini-tools">
+              <div class="gemini-tool">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21 3 6"/></svg>
+                navigate_to
+              </div>
+              <div class="gemini-tool">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 1v4M12 19v4"/></svg>
+                set_ping
+              </div>
+              <div class="gemini-tool">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8"/><circle cx="12" cy="12" r="3"/></svg>
+                obstacle_scan
+              </div>
+              <div class="gemini-tool">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4"/></svg>
+                invoke_openclaw
+              </div>
             </div>
           </div>
         </div>
         <div class="two-col-text">
-          <div class="section-label">Spatial Audio</div>
+          <div class="section-label">Gemini 2.5 Live</div>
+          <h2 class="section-title-sm">Always listening,<br/>always watching.</h2>
+          <p>A persistent WebSocket to <code>gemini-2.5-flash-native-audio-preview</code> carries bidirectional PCM audio (16kHz mic, 24kHz speaker) and JPEG video frames at 1fps. The model maintains full spatial context between turns.</p>
+          <p>Four tool calls give Gemini direct control over the app: <code>navigate_to</code> starts a GPS route, <code>set_ping</code> places the ARKit beacon, <code>invoke_openclaw_tool</code> routes to the OpenClaw gateway, and the <code>[OBSTACLE SCAN]</code> trigger fires proactively when depth urgency spikes above 0.25.</p>
+          <div class="code-block">
+            <div class="code-header">
+              <span class="code-dot"></span>
+              <span class="code-dot"></span>
+              <span class="code-dot"></span>
+              <span class="code-file">StreamSessionViewModel.swift</span>
+            </div>
+            <pre><code><span class="cm">// Proactive obstacle scan trigger</span>
+<span class="kw">let</span> shouldScan =
+  (obstacle.urgency > <span class="num">0.25</span> || audioEngine.beaconActive)
+  && now.timeIntervalSince(lastScan) >= cooldown
+  && !(geminiVM?.isModelSpeaking ?? <span class="kw">false</span>)
+
+<span class="kw">if</span> shouldScan {
+  lastObstacleScanTime = now
+  geminiSessionVM?.sendObstacleScan()
+}</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SPATIAL AUDIO DETAIL -->
+  <section class="section">
+    <div class="container">
+      <div class="two-col">
+        <div class="two-col-text">
+          <div class="section-label">Spatial audio</div>
           <h2 class="section-title-sm">A 3D soundscape<br/>around you.</h2>
-          <p>The SpatialAudioEngine places every sound in a precise direction using HRTF (Head-Related Transfer Function) — the same technique used in gaming to simulate 3D audio over headphones.</p>
-          <p>The shrine beacon is anchored to a real GPS coordinate and stays fixed in space as you rotate and walk. Gyro-relative tracking ensures "12 o'clock" always means straight ahead, not north.</p>
+          <p>SpatialAudioEngine places every sound in precise 3D space via AVAudioEnvironmentNode with HRTF-HQ rendering (iOS 15+). The 8-voice pool supports simultaneous obstacle pings, beacon chime, shore ambient, and Gemini voice — all spatially separated.</p>
+          <p>The shrine beacon is anchored to a real GPS coordinate and ARKit camera transform. EMA-smoothed compass heading ensures "12 o'clock" always means straight ahead. Shore ambient ocean sound layers in when you're within ±20° of the beacon direction.</p>
           <div class="code-block">
             <div class="code-header">
               <span class="code-dot"></span>
@@ -674,14 +722,112 @@
 env.listenerPosition = AVAudio3DPoint(
   x: <span class="num">0</span>, y: <span class="num">0</span>, z: <span class="num">0</span>
 )
-env.reverbParameters.enable = <span class="kw">true</span>
 
-<span class="cm">// Place beacon at GPS-anchored bearing</span>
+<span class="cm">// GPS-anchored bearing → 3D position</span>
 beacon.position = AVAudio3DPoint(
   x: sin(bearingRad) * dist,
   y: <span class="num">0</span>,
   z: -cos(bearingRad) * dist
 )</code></pre>
+          </div>
+        </div>
+        <div class="two-col-visual">
+          <div class="audio-viz">
+            <div class="audio-rings">
+              <div class="audio-ring ar-1"></div>
+              <div class="audio-ring ar-2"></div>
+              <div class="audio-ring ar-3"></div>
+              <div class="audio-ring ar-4"></div>
+              <div class="audio-center">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 18.5A2.5 2.5 0 0 1 9.5 16v-4a2.5 2.5 0 0 1 5 0v4a2.5 2.5 0 0 1-2.5 2.5z"/><path d="M19 11a7 7 0 0 1-14 0"/></svg>
+              </div>
+            </div>
+            <div class="audio-labels">
+              <div class="audio-label al-12">12 o'clock</div>
+              <div class="audio-label al-3">3 o'clock</div>
+              <div class="audio-label al-6">6 o'clock</div>
+              <div class="audio-label al-9">9 o'clock</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TECH STACK -->
+  <section class="section section-dark" id="stack">
+    <div class="container">
+      <div class="section-label">Tech stack</div>
+      <h2 class="section-title">Built on Apple-native<br/>frameworks.</h2>
+
+      <div class="tech-grid">
+        <div class="tech-category">
+          <div class="tech-category-title">Machine Learning</div>
+          <div class="tech-pills">
+            <span class="tech-pill">CoreML</span>
+            <span class="tech-pill">DepthAnything V2 Small</span>
+            <span class="tech-pill">Apple Neural Engine</span>
+            <span class="tech-pill">Vision.framework</span>
+            <span class="tech-pill">VNDetectHumanRectangles</span>
+            <span class="tech-pill">VNClassifyImageRequest</span>
+            <span class="tech-pill">VNGenerateSaliency</span>
+          </div>
+        </div>
+        <div class="tech-category">
+          <div class="tech-category-title">Audio</div>
+          <div class="tech-pills">
+            <span class="tech-pill">AVAudioEngine</span>
+            <span class="tech-pill">AVAudioEnvironmentNode</span>
+            <span class="tech-pill">HRTF-HQ Spatial Audio</span>
+            <span class="tech-pill">AVSpeechSynthesizer</span>
+            <span class="tech-pill">SFSpeechRecognizer</span>
+            <span class="tech-pill">ElevenLabs TTS</span>
+            <span class="tech-pill">DSP Oscillators</span>
+          </div>
+        </div>
+        <div class="tech-category">
+          <div class="tech-category-title">AI / Cloud</div>
+          <div class="tech-pills">
+            <span class="tech-pill">Gemini 2.5 Flash Preview</span>
+            <span class="tech-pill">Gemini Live WebSocket</span>
+            <span class="tech-pill">Native Audio Preview</span>
+            <span class="tech-pill">Tool Calls</span>
+            <span class="tech-pill">Google Maps Directions</span>
+            <span class="tech-pill">Google Places API</span>
+            <span class="tech-pill">SendGrid Email</span>
+          </div>
+        </div>
+        <div class="tech-category">
+          <div class="tech-category-title">Sensors & Navigation</div>
+          <div class="tech-pills">
+            <span class="tech-pill">CoreLocation GPS</span>
+            <span class="tech-pill">CoreMotion 100Hz</span>
+            <span class="tech-pill">CMAttitude Gyroscope</span>
+            <span class="tech-pill">CLHeading Compass</span>
+            <span class="tech-pill">CoreHaptics</span>
+            <span class="tech-pill">ARKit Camera Transform</span>
+          </div>
+        </div>
+        <div class="tech-category">
+          <div class="tech-category-title">Performance</div>
+          <div class="tech-pills">
+            <span class="tech-pill">Accelerate.framework</span>
+            <span class="tech-pill">vDSP_vsmul</span>
+            <span class="tech-pill">vDSP_vfixu8</span>
+            <span class="tech-pill">vImage LUT</span>
+            <span class="tech-pill">Metal CIContext</span>
+            <span class="tech-pill">SIMD float ops</span>
+          </div>
+        </div>
+        <div class="tech-category">
+          <div class="tech-category-title">Connectivity & Wearables</div>
+          <div class="tech-pills">
+            <span class="tech-pill">MWDATCore SDK</span>
+            <span class="tech-pill">MWDATCamera</span>
+            <span class="tech-pill">WebRTC</span>
+            <span class="tech-pill">WebSocket</span>
+            <span class="tech-pill">OpenClaw Bridge</span>
+            <span class="tech-pill">URLSession</span>
           </div>
         </div>
       </div>
@@ -695,7 +841,7 @@ beacon.position = AVAudio3DPoint(
         <div class="footer-brand">
           <div class="footer-logo">
             <div class="logo-mark">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
             </div>
             Moment
           </div>
@@ -707,19 +853,20 @@ beacon.position = AVAudio3DPoint(
             <a href="#features">Spatial Audio</a>
             <a href="#features">Depth Sensing</a>
             <a href="#features">Gemini Live</a>
-            <a href="#features">Navigation</a>
+            <a href="#features">Fall Detection</a>
           </div>
           <div class="footer-col">
-            <div class="footer-col-title">Architecture</div>
-            <a href="#architecture">Pipeline</a>
-            <a href="#architecture">Components</a>
+            <div class="footer-col-title">Technical</div>
+            <a href="#architecture">Architecture</a>
+            <a href="#how-it-works">Pipeline</a>
             <a href="#hardware">Hardware</a>
+            <a href="#stack">Tech Stack</a>
           </div>
         </div>
       </div>
       <div class="footer-bottom">
         <span>© 2026 Moment. Open source.</span>
-        <span>Swift · iOS · CoreML · Gemini</span>
+        <span>Swift · iOS · CoreML · Gemini 2.5</span>
       </div>
     </div>
   </footer>

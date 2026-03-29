@@ -16,10 +16,10 @@ const observer = new IntersectionObserver((entries) => {
 
 // Add fade-up to key elements after DOM load
 document.querySelectorAll(
-  '.pipeline-step, .feature-card, .arch-node, .hardware-card, .tech-category, .arch-layer'
+  '.pipeline-step, .feature-card, .arch-node, .hardware-card, .tech-category, .arch-layer, .metric-item'
 ).forEach((el, i) => {
   el.classList.add('fade-up');
-  el.style.transitionDelay = `${(i % 4) * 0.08}s`;
+  el.style.transitionDelay = `${(i % 6) * 0.07}s`;
   observer.observe(el);
 });
 
