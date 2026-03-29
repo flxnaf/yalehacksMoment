@@ -1,6 +1,6 @@
+import ARKit
 import AVFoundation
 import CoreLocation
-import CoreMotion
 import UIKit
 
 // MARK: - Sheikah Sensor Voice (BOTW shrine detector)
@@ -105,7 +105,7 @@ final class ShrinePingVoice {
 // MARK: - Shore Audio Manager (file-based bell + ocean)
 
 /// Plays real audio files (bell_chime.caf, ocean_waves.caf).
-/// Bell pitched up +1200 cents (1 octave), double ding-ding via scheduling.
+/// Double ding-ding via back-to-back scheduling on the bell player.
 /// Ocean fades out within ~1 second when user looks away.
 final class ShoreAudioManager {
 
@@ -191,8 +191,7 @@ final class ShoreAudioManager {
         oceanPlayer.volume = 0
     }
 
-    /// Schedule the bell file twice with a 150ms gap for "ding-ding".
-    /// Both at the same pitch (bellPitch handles the octave shift).
+    /// Schedule the bell file twice back-to-back for "ding-ding".
     private func playDoubleBell() {
         guard let buf = bellBuffer else { return }
         bellPlayer.stop()
@@ -228,15 +227,11 @@ final class ShoreAudioManager {
 
 /// Spatial audio engine with a single BOTW Sheikah Sensor ping.
 ///
-/// **Key design**: Instead of rotating the HRTF listener (which Apple's
-/// API doesn't apply strongly enough), we keep the listener fixed at
-/// the origin facing forward and **move the source node** to the correct
-/// relative position each frame. When you turn right 90°, the source
-/// physically moves to x = -dist (hard left in the audio scene).
-///
-/// Head orientation is fused from:
-/// 1. CLHeading magnetometer compass — absolute anchor, drift-free
-/// 2. CMMotionManager gyro deltas — smooth 60 Hz interpolation
+/// **Key design**: The listener stays fixed at the origin facing forward.
+/// We **move the source node** to the correct relative position each
+/// frame. Direction and distance are derived from ARKit's visual-inertial
+/// odometry (6DOF camera tracking), which is rock-solid indoors and out.
+/// GPS coordinates serve as an outdoor fallback for distance only.
 @MainActor
 final class SpatialAudioEngine: ObservableObject {
 
@@ -295,29 +290,21 @@ final class SpatialAudioEngine: ObservableObject {
     let pathFinder = PathFinder()
     let visionDetector = VisionDetector()
 
-    private let motion = CMMotionManager()
     private let sampleRate: Double = 44100
 
-    // MARK: - Head tracking (gyro-relative — no magnetometer for direction)
+    // MARK: - ARKit waypoint tracking
 
-    /// GPS coordinate of the beacon (for distance only, not direction).
+    /// GPS coordinate of the beacon (for outdoor distance fallback).
     private var beaconCoordinate: CLLocationCoordinate2D?
 
     /// Threshold distance to auto-clear the beacon (meters).
     private var arrivalThresholdMeters: Float = 3.0
 
-    // Gyro-relative tracking: the beacon's direction is tracked purely from
-    // gyroscope rotation deltas since placement. The magnetometer and GPS are
-    // NOT used for direction — only the gyro, which is rock-solid indoors.
+    /// The waypoint's position in ARKit world space (set when beacon is placed).
+    private var waypointWorldPosition: simd_float3?
 
-    /// The relative angle of the beacon at placement time (degrees).
-    private var initialRelativeAngle: Float = 0
-
-    /// The raw gyro yaw (radians) at the moment the beacon was placed.
-    private var gyroYawAtPlacement: Double = .nan
-
-    /// Latest raw gyro yaw (radians), updated every frame at 60 Hz.
-    private var currentGyroYaw: Double = .nan
+    /// The latest ARFrame camera transform, updated every frame (~60 fps).
+    private var latestCameraTransform: simd_float4x4?
 
     // MARK: - Observers
 
@@ -358,7 +345,6 @@ final class SpatialAudioEngine: ObservableObject {
     /// currently facing. 0 = ahead, -90 = left, +90 = right.
     /// `distanceMeters` sets how far away the beacon is (default 10m).
     func setBeaconBearing(_ degrees: Float, distanceMeters: Float = 10) {
-        // Auto-enable if not already running (e.g., user hasn't toggled it on)
         if !isEnabled {
             isEnabled = true
         }
@@ -368,12 +354,25 @@ final class SpatialAudioEngine: ObservableObject {
         beaconDistanceMeters = distanceMeters
         arrivalThresholdMeters = max(2.0, distanceMeters * 0.2)
 
-        // Snapshot gyro yaw at placement. Direction will be tracked
-        // purely from gyro rotation deltas — no magnetometer.
-        initialRelativeAngle = degrees
-        gyroYawAtPlacement = currentGyroYaw
+        // Compute 3D world position using the current ARKit camera transform.
+        if let cam = latestCameraTransform {
+            let camPos = simd_float3(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
+            let forward = -simd_normalize(simd_float3(cam.columns.2.x, 0, cam.columns.2.z))
+            let bearingRad = degrees * .pi / 180
+            let cosB = cos(bearingRad), sinB = sin(bearingRad)
+            let direction = simd_float3(
+                forward.x * cosB + forward.z * sinB,
+                0,
+                -forward.x * sinB + forward.z * cosB
+            )
+            waypointWorldPosition = camPos + simd_normalize(direction) * distanceMeters
+            print("[SpatialAudio] Beacon placed in AR world: \(waypointWorldPosition!) (\(distanceMeters)m, \(degrees)° relative)")
+        } else {
+            waypointWorldPosition = nil
+            print("[SpatialAudio] No AR frame yet — beacon placed as angle-only fallback")
+        }
 
-        // GPS coordinate for distance tracking (not direction)
+        // GPS coordinate as outdoor fallback
         let compassBearing = Double(Self.wrapAngle360(fusedHeadingDegrees + degrees))
         if let userCoord = LocationManager.shared.currentCoordinate {
             beaconCoordinate = Self.destinationCoordinate(
@@ -381,11 +380,9 @@ final class SpatialAudioEngine: ObservableObject {
                 bearingDegrees: compassBearing,
                 distanceMeters: Double(distanceMeters)
             )
-            print("[SpatialAudio] Beacon GPS: \(beaconCoordinate!.latitude), \(beaconCoordinate!.longitude) (\(distanceMeters)m)")
         } else {
             beaconCoordinate = nil
         }
-        print("[SpatialAudio] Beacon placed: \(degrees)° relative, gyroYaw=\(String(format: "%.3f", currentGyroYaw))")
 
         beaconActive = true
         shrinePing.targetVolume = 0.70
@@ -396,6 +393,7 @@ final class SpatialAudioEngine: ObservableObject {
     func clearBeacon() {
         beaconActive = false
         beaconCoordinate = nil
+        waypointWorldPosition = nil
         shrinePing.targetVolume = 0
         shoreAudio.stop()
         isOnTarget = false
@@ -504,6 +502,25 @@ final class SpatialAudioEngine: ObservableObject {
         return wrapAngle(current + diff * alpha)
     }
 
+    /// Called every AR frame (~60 fps) with the latest camera transform.
+    /// Projects the 3D waypoint into camera-local space for direction + distance.
+    func updateFromARFrame(_ frame: ARFrame) {
+        latestCameraTransform = frame.camera.transform
+
+        // Update compass heading for UI (cosmetic)
+        let compassHeading = Float(LocationManager.shared.currentHeading)
+        if compassHeading > 0 {
+            fusedHeadingDegrees = Self.circularEMA(
+                current: fusedHeadingDegrees,
+                target: compassHeading,
+                alpha: 0.05
+            )
+            fusedHeadingDegrees = Self.wrapAngle360(fusedHeadingDegrees)
+        }
+
+        updateShrineNodePosition()
+    }
+
     private func updateShrineNodePosition() {
         guard beaconActive else {
             relativeBeaconAngle = 0
@@ -513,53 +530,32 @@ final class SpatialAudioEngine: ObservableObject {
             return
         }
 
-        // --- Direction: gyro-relative + GPS recalibration when walking ---
-        if !gyroYawAtPlacement.isNaN && !currentGyroYaw.isNaN {
-            var yawDelta = currentGyroYaw - gyroYawAtPlacement
-            if yawDelta > .pi { yawDelta -= 2 * .pi }
-            if yawDelta < -.pi { yawDelta += 2 * .pi }
-            let gyroRelative = initialRelativeAngle + Float(yawDelta * 180.0 / .pi)
-            let rawRelative = Self.wrapAngle(gyroRelative)
-
+        // --- ARKit-based direction + distance (primary) ---
+        if let wp = waypointWorldPosition, let cam = latestCameraTransform {
+            let localPos = cam.inverse * simd_float4(wp.x, wp.y, wp.z, 1)
+            let rawAngle = atan2(localPos.x, -localPos.z) * 180 / .pi
             relativeBeaconAngle = Self.circularEMA(
                 current: relativeBeaconAngle,
-                target: rawRelative,
-                alpha: 0.25
+                target: Self.wrapAngle(rawAngle),
+                alpha: 0.4
             )
-        }
 
-        // --- GPS: distance + lateral movement correction ---
-        if let beaconCoord = beaconCoordinate,
-           let userCoord = LocationManager.shared.currentCoordinate {
-            let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
-            let beaconLoc = CLLocation(latitude: beaconCoord.latitude, longitude: beaconCoord.longitude)
-            let rawDist = Float(userLoc.distance(from: beaconLoc))
-            beaconDistanceMeters += (rawDist - beaconDistanceMeters) * 0.08
+            let camPos = simd_float3(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
+            let dist = simd_length(wp - camPos)
+            beaconDistanceMeters += (dist - beaconDistanceMeters) * 0.15
 
             if beaconDistanceMeters < arrivalThresholdMeters {
                 clearBeacon()
                 AudioOrchestrator.shared.enqueue("You've arrived.", priority: .hazard)
                 return
             }
-
-            // When walking, GPS bearing accounts for lateral movement
-            // (sidestepping). Gently recalibrate the gyro baseline so
-            // the ping shifts to reflect the new geometric angle.
-            let speed = LocationManager.shared.currentSpeed
-            if speed > 0.5 && !currentGyroYaw.isNaN {
-                let gpsBearing = Float(Self.bearing(from: userCoord, to: beaconCoord))
-                let compassHeading = Float(LocationManager.shared.currentHeading)
-                guard compassHeading > 0 else { return }
-                let gpsRelative = Self.wrapAngle(gpsBearing - compassHeading)
-
-                var yawDelta = currentGyroYaw - gyroYawAtPlacement
-                if yawDelta > .pi { yawDelta -= 2 * .pi }
-                if yawDelta < -.pi { yawDelta += 2 * .pi }
-                let gyroRelative = initialRelativeAngle + Float(yawDelta * 180.0 / .pi)
-
-                let correction = Self.wrapAngle(gpsRelative - gyroRelative)
-                initialRelativeAngle += correction * 0.03
-            }
+        } else if let beaconCoord = beaconCoordinate,
+                  let userCoord = LocationManager.shared.currentCoordinate {
+            // GPS fallback (no AR frame yet, or outdoors)
+            let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+            let beaconLoc = CLLocation(latitude: beaconCoord.latitude, longitude: beaconCoord.longitude)
+            let rawDist = Float(userLoc.distance(from: beaconLoc))
+            beaconDistanceMeters += (rawDist - beaconDistanceMeters) * 0.08
         }
 
         // --- Audio spatialization ---
@@ -579,7 +575,7 @@ final class SpatialAudioEngine: ObservableObject {
 
         posLogCount += 1
         if posLogCount % 120 == 1 {
-            print("[ShrinePos] gyro-rel heading=\(String(format: "%.0f", fusedHeadingDegrees))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m zone=\(inZone) shore=\(shoreAudio.isPlaying)")
+            print("[ShrinePos] ARKit heading=\(String(format: "%.0f", fusedHeadingDegrees))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m zone=\(inZone) shore=\(shoreAudio.isPlaying)")
         }
     }
 
@@ -647,9 +643,8 @@ final class SpatialAudioEngine: ObservableObject {
         }
         LocationManager.shared.requestPermissionAndStart()
         fusedHeadingDegrees = Float(LocationManager.shared.currentHeading)
-        startMotionTracking()
         haptics.start()
-        print("[SpatialAudio] Started — gyro tracking active, heading=\(String(format: "%.0f", fusedHeadingDegrees))°")
+        print("[SpatialAudio] Started — ARKit tracking active, heading=\(String(format: "%.0f", fusedHeadingDegrees))°")
     }
 
     /// Only configure the audio session if it hasn't already been set up
@@ -680,6 +675,8 @@ final class SpatialAudioEngine: ObservableObject {
         isOnTarget = false
         beaconActive = false
         beaconCoordinate = nil
+        waypointWorldPosition = nil
+        latestCameraTransform = nil
         activePath = nil
         rawPaths = []
         depthProfile = []
@@ -690,7 +687,6 @@ final class SpatialAudioEngine: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.avEngine.stop()
         }
-        motion.stopDeviceMotionUpdates()
         pathFinder.reset()
         print("[SpatialAudio] Stopped")
     }
@@ -746,45 +742,9 @@ final class SpatialAudioEngine: ObservableObject {
             self.shrinePing.targetVolume = 0
             self.haptics.stop()
             self.avEngine.stop()
-            self.motion.stopDeviceMotionUpdates()
         }
     }
 
-    private var motionLogCount = 0
-
-    /// Pure gyroscope tracking at 60 Hz. No magnetometer in the loop —
-    /// the beacon direction is computed entirely from gyro rotation deltas
-    /// since placement. This is rock-solid indoors where magnetometers fail.
-    private func startMotionTracking() {
-        guard motion.isDeviceMotionAvailable else {
-            print("[SpatialAudio] DeviceMotion NOT available")
-            return
-        }
-        motion.deviceMotionUpdateInterval = 1.0 / 60
-        motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
-            guard let self, let att = data?.attitude else { return }
-
-            self.currentGyroYaw = att.yaw
-
-            // fusedHeadingDegrees still used for UI compass display
-            // (gently pulled toward CLHeading for cosmetic accuracy)
-            let compassHeading = Float(LocationManager.shared.currentHeading)
-            if compassHeading > 0 {
-                self.fusedHeadingDegrees = Self.circularEMA(
-                    current: self.fusedHeadingDegrees,
-                    target: compassHeading,
-                    alpha: 0.03
-                )
-                self.fusedHeadingDegrees = Self.wrapAngle360(self.fusedHeadingDegrees)
-            }
-
-            self.updateShrineNodePosition()
-
-            self.motionLogCount += 1
-            if self.motionLogCount % 120 == 1 {
-                print("[Heading] gyroYaw=\(String(format: "%.3f", att.yaw)) compass=\(String(format: "%.0f", compassHeading))° beacon=\(self.beaconActive) rel=\(String(format: "%.1f", self.relativeBeaconAngle))°")
-            }
-        }
-        print("[SpatialAudio] Gyro-relative tracking started (60 Hz, no magnetometer)")
-    }
+    // Motion tracking is now handled by ARKit via updateFromARFrame().
+    // CMMotionManager is no longer used for waypoint direction.
 }

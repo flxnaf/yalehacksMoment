@@ -14,6 +14,7 @@
 // video frame handling, photo capture, and error handling.
 //
 
+import ARKit
 import CoreImage
 import CoreMedia
 import CoreVideo
@@ -535,6 +536,11 @@ class StreamSessionViewModel: ObservableObject {
         self.geminiSessionVM?.sendVideoFrameIfThrottled(image: image)
         self.webrtcSessionVM?.pushVideoFrame(image)
         self.scheduleDepthInference(on: image)
+      }
+    }
+    camera.onARFrameUpdate = { [weak self] frame in
+      Task { @MainActor [weak self] in
+        self?.audioEngine.updateFromARFrame(frame)
       }
     }
     camera.start()

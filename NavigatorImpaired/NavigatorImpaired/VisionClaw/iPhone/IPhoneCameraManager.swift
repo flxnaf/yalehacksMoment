@@ -1,68 +1,40 @@
-import AVFoundation
+import ARKit
 import UIKit
 
 class IPhoneCameraManager: NSObject {
-  private let captureSession = AVCaptureSession()
-  private let videoOutput = AVCaptureVideoDataOutput()
-  private let sessionQueue = DispatchQueue(label: "iphone-camera-session")
+  private let arSession = ARSession()
   private let context = CIContext()
   private var isRunning = false
 
   var onFrameCaptured: ((UIImage) -> Void)?
+  var onARFrameUpdate: ((ARFrame) -> Void)?
 
   func start() {
     guard !isRunning else { return }
-    sessionQueue.async { [weak self] in
-      self?.configureSession()
-      self?.captureSession.startRunning()
-      self?.isRunning = true
+    arSession.delegate = self
+    let config = ARWorldTrackingConfiguration()
+    config.worldAlignment = .gravity
+    config.isAutoFocusEnabled = true
+    if let hiRes = ARWorldTrackingConfiguration.supportedVideoFormats.first(where: {
+      $0.imageResolution.width >= 1280
+    }) {
+      config.videoFormat = hiRes
     }
+    arSession.run(config, options: [.resetTracking, .removeExistingAnchors])
+    isRunning = true
+    NSLog("[iPhoneCamera] ARSession started (world tracking)")
   }
 
   func stop() {
     guard isRunning else { return }
-    sessionQueue.async { [weak self] in
-      self?.captureSession.stopRunning()
-      self?.isRunning = false
-    }
+    arSession.pause()
+    isRunning = false
+    NSLog("[iPhoneCamera] ARSession paused")
   }
 
-  private func configureSession() {
-    captureSession.beginConfiguration()
-    captureSession.sessionPreset = .medium
-
-    // Add back camera input
-    guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-          let input = try? AVCaptureDeviceInput(device: camera) else {
-      NSLog("[iPhoneCamera] Failed to access back camera")
-      captureSession.commitConfiguration()
-      return
-    }
-
-    if captureSession.canAddInput(input) {
-      captureSession.addInput(input)
-    }
-
-    // Add video output
-    videoOutput.videoSettings = [
-      kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-    ]
-    videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
-    videoOutput.alwaysDiscardsLateVideoFrames = true
-
-    if captureSession.canAddOutput(videoOutput) {
-      captureSession.addOutput(videoOutput)
-    }
-
-    // Force portrait-oriented frames from the sensor
-    if let connection = videoOutput.connection(with: .video) {
-      if connection.isVideoRotationAngleSupported(90) {
-        connection.videoRotationAngle = 90
-      }
-    }
-
-    captureSession.commitConfiguration()
-    NSLog("[iPhoneCamera] Session configured")
+  /// Expose the latest AR frame for waypoint placement.
+  var currentFrame: ARFrame? {
+    arSession.currentFrame
   }
 
   static func requestPermission() async -> Bool {
@@ -78,20 +50,18 @@ class IPhoneCameraManager: NSObject {
   }
 }
 
-// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+// MARK: - ARSessionDelegate
 
-extension IPhoneCameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
-  func captureOutput(
-    _ output: AVCaptureOutput,
-    didOutput sampleBuffer: CMSampleBuffer,
-    from connection: AVCaptureConnection
-  ) {
-    guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
+extension IPhoneCameraManager: ARSessionDelegate {
+  func session(_ session: ARSession, didUpdate frame: ARFrame) {
+    let pixelBuffer = frame.capturedImage
     let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        .oriented(.right)
+
     guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
     let image = UIImage(cgImage: cgImage)
 
     onFrameCaptured?(image)
+    onARFrameUpdate?(frame)
   }
 }
