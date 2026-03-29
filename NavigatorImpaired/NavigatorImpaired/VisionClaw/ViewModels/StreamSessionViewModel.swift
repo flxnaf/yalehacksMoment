@@ -14,7 +14,6 @@
 // video frame handling, photo capture, and error handling.
 //
 
-import ARKit
 import CoreImage
 import CoreMedia
 import CoreVideo
@@ -153,6 +152,14 @@ class StreamSessionViewModel: ObservableObject {
     rayBanCameraManager.bind(streamViewModel: self)
     FallDetectionCoordinator.shared.cameraManager = rayBanCameraManager
     AudioOrchestrator.shared.spatialAudioHost = audioEngine
+
+    NotificationCenter.default.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification,
+      object: nil, queue: .main
+    ) { [weak self] _ in
+      self?.geminiSessionVM?.stopSession()
+      NSLog("[Stream] Gemini stopped (app backgrounded)")
+    }
   }
 
   /// Load Depth Anything model once (background). Call from stream `onAppear`.
@@ -331,6 +338,7 @@ class StreamSessionViewModel: ObservableObject {
   private func stopIPhoneSessionForSourceSwitch() {
     iPhoneCameraManager?.stop()
     iPhoneCameraManager = nil
+    audioEngine.cameraManager = nil
     currentVideoFrame = nil
     depthFrame = nil
     hasReceivedFirstFrame = false
@@ -529,6 +537,10 @@ class StreamSessionViewModel: ObservableObject {
     camera.onFrameCaptured = { [weak self] image in
       Task { @MainActor [weak self] in
         guard let self else { return }
+        // Read the latest camera transform from the camera manager (no ARFrame retained)
+        if let cam = self.iPhoneCameraManager {
+          self.audioEngine.updateCameraTransform(cam.latestTransform)
+        }
         self.currentVideoFrame = image
         if !self.hasReceivedFirstFrame {
           self.hasReceivedFirstFrame = true
@@ -538,14 +550,9 @@ class StreamSessionViewModel: ObservableObject {
         self.scheduleDepthInference(on: image)
       }
     }
-    camera.onARFrameUpdate = { [weak self] frame in
-      Task { @MainActor [weak self] in
-        self?.audioEngine.updateFromARFrame(frame)
-      }
-    }
-    audioEngine.arSession = camera.arSession
     camera.start()
     iPhoneCameraManager = camera
+    audioEngine.cameraManager = camera
     streamingStatus = .streaming
     NSLog("[Stream] iPhone camera mode started")
   }
@@ -553,12 +560,12 @@ class StreamSessionViewModel: ObservableObject {
   private func stopIPhoneSession() {
     iPhoneCameraManager?.stop()
     iPhoneCameraManager = nil
+    audioEngine.cameraManager = nil
     currentVideoFrame = nil
     depthFrame = nil
     hasReceivedFirstFrame = false
     streamingStatus = .stopped
     streamingMode = .glasses
-    audioEngine.arSession = nil
     audioEngine.isEnabled = false
     audioEngine.setGlassesMode(true)
     NSLog("[Stream] iPhone camera mode stopped")

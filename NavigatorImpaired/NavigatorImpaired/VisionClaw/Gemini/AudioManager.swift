@@ -43,14 +43,14 @@ class AudioManager {
     if useIPhoneMode || forceSpeaker {
       try session.setCategory(
         .playAndRecord,
-        mode: .voiceChat,
-        options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+        mode: .default,
+        options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers]
       )
     } else {
       try session.setCategory(
         .playAndRecord,
-        mode: .videoChat,
-        options: [.allowBluetooth, .mixWithOthers, .defaultToSpeaker]
+        mode: .default,
+        options: [.allowBluetoothA2DP, .mixWithOthers, .defaultToSpeaker]
       )
     }
     try session.setPreferredSampleRate(GeminiConfig.inputAudioSampleRate)
@@ -60,7 +60,7 @@ class AudioManager {
       try session.overrideOutputAudioPort(.speaker)
       NSLog("[Audio] Speaker output override: ON (iPhone speaker)")
     }
-    NSLog("[Audio] Session mode: %@", useIPhoneMode ? "voiceChat (iPhone)" : "videoChat (glasses)")
+    NSLog("[Audio] Session mode: default (%@) — HRTF preserved", useIPhoneMode ? "iPhone" : "glasses")
 
     setupInterruptionHandling()
     setupAppLifecycleObservers()

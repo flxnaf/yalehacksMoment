@@ -1,13 +1,11 @@
-import ARKit
 import AVFoundation
 import CoreLocation
+import CoreMotion
+import simd
 import UIKit
 
 // MARK: - Sheikah Sensor Voice (BOTW shrine detector)
 
-/// Two short, crisp high-pitched tones ~120ms apart ("ding-ding"),
-/// then silence until the next cycle. Pure sine with octave overtone,
-/// fast exponential decay, and subtle pitch bend on attack.
 final class ShrinePingVoice {
 
     var targetVolume: Float = 0
@@ -104,9 +102,6 @@ final class ShrinePingVoice {
 
 // MARK: - Shore Audio Manager (file-based bell + ocean)
 
-/// Plays real audio files (bell_chime.caf, ocean_waves.caf).
-/// Double ding-ding via back-to-back scheduling on the bell player.
-/// Ocean fades out within ~1 second when user looks away.
 final class ShoreAudioManager {
 
     var wantsPlay: Bool = false
@@ -153,12 +148,7 @@ final class ShoreAudioManager {
             startOceanLoop()
             playDoubleBell()
         }
-
-        if wantsPlay {
-            offTargetFrames = 0
-        } else {
-            offTargetFrames += 1
-        }
+        if wantsPlay { offTargetFrames = 0 } else { offTargetFrames += 1 }
 
         let target: Float = wantsPlay ? 0.45 : 0
         let slew: Float = wantsPlay ? 0.03 : 0.06
@@ -171,7 +161,6 @@ final class ShoreAudioManager {
                 playDoubleBell()
                 bellCooldownFrames = 0
             }
-
             if !wantsPlay && offTargetFrames > 60 {
                 isPlaying = false
                 oceanPlayer.stop()
@@ -191,13 +180,10 @@ final class ShoreAudioManager {
         oceanPlayer.volume = 0
     }
 
-    /// Schedule the bell file twice back-to-back for "ding-ding".
     private func playDoubleBell() {
         guard let buf = bellBuffer else { return }
         bellPlayer.stop()
-        bellPlayer.scheduleBuffer(buf, at: nil, options: []) { [weak self] in
-            // Second ding after first finishes — runs on audio thread
-        }
+        bellPlayer.scheduleBuffer(buf, at: nil, options: []) { [weak self] in _ = self }
         bellPlayer.scheduleBuffer(buf, at: nil, options: [], completionHandler: nil)
         bellPlayer.play()
     }
@@ -210,28 +196,22 @@ final class ShoreAudioManager {
     }
 
     private static func loadCAF(named name: String) -> AVAudioPCMBuffer? {
-        guard let url = Bundle.main.url(forResource: name, withExtension: "caf") else {
-            return nil
-        }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "caf") else { return nil }
         guard let file = try? AVAudioFile(forReading: url) else { return nil }
         let frameCount = AVAudioFrameCount(file.length)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frameCount) else {
-            return nil
-        }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frameCount) else { return nil }
         try? file.read(into: buffer)
         return buffer
     }
 }
 
 // MARK: - SpatialAudioEngine
+//
+// Restored from commit 4401cab ("Stabilize beacon with Apple sensor fusion").
+// This version tracks heading via Apple's built-in .xMagneticNorthZVertical
+// Kalman filter at 60 Hz and calls updateShrineNodePosition() DIRECTLY
+// from the motion callback — no Task, no ARKit, no async overhead.
 
-/// Spatial audio engine with a single BOTW Sheikah Sensor ping.
-///
-/// **Key design**: The listener stays fixed at the origin facing forward.
-/// We **move the source node** to the correct relative position each
-/// frame. Direction and distance are derived from ARKit's visual-inertial
-/// odometry (6DOF camera tracking), which is rock-solid indoors and out.
-/// GPS coordinates serve as an outdoor fallback for distance only.
 @MainActor
 final class SpatialAudioEngine: ObservableObject {
 
@@ -242,26 +222,13 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     @Published var hapticsEnabled: Bool = true
-
     @Published var beaconActive: Bool = false
-
-    /// The relative bearing Gemini requested (for UI display).
     @Published var beaconBearingDegrees: Float = 0
-
-    /// Current fused heading in degrees (compass-referenced, 0 = north).
     @Published var fusedHeadingDegrees: Float = 0
-
-    /// Smoothed angle of the shrine ping relative to the user's current facing.
-    /// 0 = ahead, negative = left, positive = right. Range: -180...180.
     @Published var relativeBeaconAngle: Float = 0
-
-    /// Distance from user to the beacon in meters. Updated every frame.
     @Published var beaconDistanceMeters: Float = 0
-
-    /// The initial distance when the beacon was placed (for UI progress).
     @Published var beaconInitialDistance: Float = 0
 
-    // PathFinder results kept for future use / UI
     @Published var activePath: ClearPath? = nil
     @Published var rawPaths: [ClearPath] = []
     @Published var depthProfile: [Float] = []
@@ -269,6 +236,8 @@ final class SpatialAudioEngine: ObservableObject {
 
     @Published var detectedPersons: [PersonDetection] = []
     @Published var detectedSceneLabel: String?
+
+    @Published var isOnTarget: Bool = false
 
     // MARK: - Audio graph
 
@@ -280,38 +249,28 @@ final class SpatialAudioEngine: ObservableObject {
 
     private let shoreAudio = ShoreAudioManager()
 
-    /// Whether the on-target shore ambient is currently playing.
-    @Published var isOnTarget: Bool = false
-
     let sightAssistSpeechPlayer = AVAudioPlayerNode()
-
     let haptics = NavigationHapticEngine()
-
     let pathFinder = PathFinder()
     let visionDetector = VisionDetector()
 
+    private let motion = CMMotionManager()
     private let sampleRate: Double = 44100
 
-    // MARK: - ARKit waypoint tracking
+    // MARK: - ARKit world tracking (primary — Snapchat-style anchor)
 
-    /// The ARSession from IPhoneCameraManager.
-    var arSession: ARSession?
-
-    /// The waypoint's fixed position in ARKit world space.
+    weak var cameraManager: IPhoneCameraManager?
     private var waypointWorldPosition: simd_float3?
+    private var pendingBeaconRequest: (bearing: Float, distance: Float)?
 
-    /// Deferred beacon: stored when setBeaconBearing is called before any
-    /// AR frame has arrived (latestCameraTransform is nil).
-    private var pendingBeacon: (degrees: Float, distance: Float)?
+    // MARK: - GPS fallback (used when ARKit is unavailable)
 
-    /// GPS coordinate of the beacon (for outdoor distance fallback).
     private var beaconCoordinate: CLLocationCoordinate2D?
-
-    /// Threshold distance to auto-clear the beacon (meters).
+    private var worldBearingOfBeacon: Float = 0
     private var arrivalThresholdMeters: Float = 3.0
-
-    /// The latest ARFrame camera transform, updated every frame (~60 fps).
-    private var latestCameraTransform: simd_float4x4?
+    private var smoothedGPSBearing: Float = 0
+    private var lockedGPSBearing: Float = 0
+    private var isGPSBearingLocked: Bool = false
 
     // MARK: - Observers
 
@@ -321,6 +280,8 @@ final class SpatialAudioEngine: ObservableObject {
     private var backgroundObserver: NSObjectProtocol?
 
     private var updateCount = 0
+    private var lastRestartAttempt: Date = .distantPast
+    private let restartCooldown: TimeInterval = 3.0
 
     // MARK: - Init
 
@@ -343,72 +304,106 @@ final class SpatialAudioEngine: ObservableObject {
         isEnabled && avEngine.isRunning
     }
 
-    /// Heading in radians for legacy callers (verbal cue controller, etc.).
     var currentHeading: Float {
         fusedHeadingDegrees * Float.pi / 180
     }
 
-    /// Place the shrine ping at a bearing relative to where the user is
-    /// currently facing. 0 = ahead, -90 = left, +90 = right.
-    /// `distanceMeters` sets how far away the beacon is (default 10m).
-    func setBeaconBearing(_ degrees: Float, distanceMeters: Float = 10) {
-        if !isEnabled {
-            isEnabled = true
+    /// Called from StreamSessionViewModel — engine health check + session guard.
+    /// Beacon tracking runs independently via CMMotionManager callback.
+    func updateCameraTransform(_ cam: Any) {
+        guard isEnabled else { return }
+        if !avEngine.isRunning {
+            throttledRestart(reason: "health check")
         }
+    }
+
+    private func throttledRestart(reason: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastRestartAttempt) >= restartCooldown else { return }
+        lastRestartAttempt = now
+        guard !avEngine.isRunning else { return }
+        print("[SpatialAudio] Engine stopped (\(reason)) — attempting restart")
+        do {
+            try avEngine.start()
+            print("[SpatialAudio] Engine restarted OK")
+        } catch {
+            print("[SpatialAudio] Engine restart FAILED: \(error)")
+        }
+    }
+
+    func setBeaconBearing(_ degrees: Float, distanceMeters: Float = 10) {
+        if !isEnabled { isEnabled = true }
 
         beaconBearingDegrees = degrees
         beaconInitialDistance = distanceMeters
         beaconDistanceMeters = distanceMeters
         arrivalThresholdMeters = max(2.0, distanceMeters * 0.2)
 
-        // Place waypoint immediately if we have a camera transform, otherwise defer
-        if let cam = latestCameraTransform {
-            waypointWorldPosition = computeWorldPosition(degrees: degrees, distance: distanceMeters, camera: cam)
-            pendingBeacon = nil
-            print("[SpatialAudio] Beacon placed at \(waypointWorldPosition!) (\(distanceMeters)m, \(degrees)° rel)")
+        // ARKit world placement (primary)
+        if let cam = cameraManager {
+            let t = cam.latestTransform
+            if t != matrix_identity_float4x4 {
+                waypointWorldPosition = Self.computeWorldPosition(
+                    cameraTransform: t,
+                    relativeBearingDeg: degrees,
+                    distance: distanceMeters
+                )
+                pendingBeaconRequest = nil
+                print("[SpatialAudio] Beacon placed in ARKit world space at \(waypointWorldPosition!)")
+            } else {
+                pendingBeaconRequest = (bearing: degrees, distance: distanceMeters)
+                waypointWorldPosition = nil
+                print("[SpatialAudio] ARKit not ready — beacon deferred")
+            }
         } else {
+            pendingBeaconRequest = (bearing: degrees, distance: distanceMeters)
             waypointWorldPosition = nil
-            pendingBeacon = (degrees, distanceMeters)
-            print("[SpatialAudio] No camera yet — beacon deferred")
         }
 
-        // GPS coordinate as outdoor fallback
-        let compassBearing = Double(Self.wrapAngle360(fusedHeadingDegrees + degrees))
+        // GPS fallback setup
+        let worldBearing = Double(Self.wrapAngle360(fusedHeadingDegrees + degrees))
+        worldBearingOfBeacon = Float(worldBearing)
+        smoothedGPSBearing = Float(worldBearing)
+        lockedGPSBearing = Float(worldBearing)
+        isGPSBearingLocked = false
+
         if let userCoord = LocationManager.shared.currentCoordinate {
             beaconCoordinate = Self.destinationCoordinate(
                 from: userCoord,
-                bearingDegrees: compassBearing,
+                bearingDegrees: worldBearing,
                 distanceMeters: Double(distanceMeters)
             )
-        } else {
-            beaconCoordinate = nil
         }
 
         beaconActive = true
         shrinePing.targetVolume = 0.70
-        relativeBeaconAngle = degrees
+        updateShrineNodePosition()
     }
 
-    /// Compute a 3D world position from bearing + distance relative to the camera.
-    private func computeWorldPosition(degrees: Float, distance: Float, camera cam: simd_float4x4) -> simd_float3 {
-        let camPos = simd_float3(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
-        let rawFwd = simd_float3(cam.columns.2.x, 0, cam.columns.2.z)
-        let forward = -simd_normalize(rawFwd)
-        let bearingRad = degrees * .pi / 180
-        let cosB = cos(bearingRad), sinB = sin(bearingRad)
-        let direction = simd_normalize(simd_float3(
-            forward.x * cosB + forward.z * sinB,
-            0,
-            -forward.x * sinB + forward.z * cosB
-        ))
-        return camPos + direction * distance
+    /// Compute a 3D world position given the camera transform and a relative bearing.
+    private static func computeWorldPosition(
+        cameraTransform t: simd_float4x4,
+        relativeBearingDeg: Float,
+        distance: Float
+    ) -> simd_float3 {
+        let camPos = simd_float3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+        let rawFwd = simd_float2(-t.columns.2.x, -t.columns.2.z)
+        let fwdLen = simd_length(rawFwd)
+        let fwd = fwdLen > 0.001 ? rawFwd / fwdLen : simd_float2(0, -1)
+
+        let rad = relativeBearingDeg * .pi / 180
+        let dir = simd_float2(
+            fwd.x * cos(rad) - fwd.y * sin(rad),
+            fwd.x * sin(rad) + fwd.y * cos(rad)
+        )
+        return simd_float3(camPos.x + dir.x * distance, camPos.y, camPos.z + dir.y * distance)
     }
 
     func clearBeacon() {
         beaconActive = false
-        beaconCoordinate = nil
         waypointWorldPosition = nil
-        pendingBeacon = nil
+        pendingBeaconRequest = nil
+        beaconCoordinate = nil
         shrinePing.targetVolume = 0
         shoreAudio.stop()
         isOnTarget = false
@@ -420,7 +415,6 @@ final class SpatialAudioEngine: ObservableObject {
 
     // MARK: - GPS math
 
-    /// Compute destination coordinate given start, bearing, and distance.
     private static func destinationCoordinate(
         from origin: CLLocationCoordinate2D,
         bearingDegrees: Double,
@@ -439,7 +433,6 @@ final class SpatialAudioEngine: ObservableObject {
                                        longitude: lon2 * 180 / .pi)
     }
 
-    /// Bearing in degrees from one coordinate to another (0 = north, CW).
     private static func bearing(from: CLLocationCoordinate2D,
                                 to: CLLocationCoordinate2D) -> Double {
         let lat1 = from.latitude * .pi / 180
@@ -452,7 +445,8 @@ final class SpatialAudioEngine: ObservableObject {
         return b
     }
 
-    /// Called each depth frame. Runs PathFinder for UI.
+    // MARK: - Depth / perception
+
     func applyPerceptionFrame(
         depthMap: [Float],
         width: Int,
@@ -485,15 +479,10 @@ final class SpatialAudioEngine: ObservableObject {
         updateCount += 1
     }
 
-    func setGlassesMode(_ glasses: Bool) {
-        // Motion tracking stays on regardless — shrine ping needs it
-    }
+    func setGlassesMode(_ glasses: Bool) {}
 
-    // MARK: - Shrine node positioning (the core spatial logic)
+    // MARK: - Angle helpers
 
-    private var posLogCount = 0
-
-    /// Normalize any angle into -180...+180.
     private static func wrapAngle(_ a: Float) -> Float {
         var v = a.truncatingRemainder(dividingBy: 360)
         if v > 180 { v -= 360 }
@@ -501,15 +490,12 @@ final class SpatialAudioEngine: ObservableObject {
         return v
     }
 
-    /// Normalize any angle into 0...360.
     private static func wrapAngle360(_ a: Float) -> Float {
         var v = a.truncatingRemainder(dividingBy: 360)
         if v < 0 { v += 360 }
         return v
     }
 
-    /// Circular EMA: smoothly interpolates angles, handling the
-    /// ±180° wrap-around so the value never snaps across the boundary.
     private static func circularEMA(current: Float, target: Float, alpha: Float) -> Float {
         var diff = target - current
         if diff > 180 { diff -= 360 }
@@ -517,33 +503,11 @@ final class SpatialAudioEngine: ObservableObject {
         return wrapAngle(current + diff * alpha)
     }
 
-    /// Called every AR frame (~60 fps). Always updates — never skips frames.
-    func updateFromARFrame(_ frame: ARFrame) {
-        let cam = frame.camera.transform
-        latestCameraTransform = cam
+    // MARK: - Shrine node positioning (called 60x/sec from motion callback)
 
-        // Place deferred beacon on the very first frame
-        if let pending = pendingBeacon {
-            waypointWorldPosition = computeWorldPosition(degrees: pending.degrees, distance: pending.distance, camera: cam)
-            pendingBeacon = nil
-            print("[SpatialAudio] Deferred beacon placed at \(waypointWorldPosition!)")
-        }
+    private var posLogCount = 0
 
-        // Update compass heading for UI (cosmetic)
-        let compassHeading = Float(LocationManager.shared.currentHeading)
-        if compassHeading > 0 {
-            fusedHeadingDegrees = Self.circularEMA(
-                current: fusedHeadingDegrees,
-                target: compassHeading,
-                alpha: 0.05
-            )
-            fusedHeadingDegrees = Self.wrapAngle360(fusedHeadingDegrees)
-        }
-
-        updateShrineNodePosition(cameraTransform: cam)
-    }
-
-    private func updateShrineNodePosition(cameraTransform cam: simd_float4x4) {
+    private func updateShrineNodePosition() {
         guard beaconActive else {
             relativeBeaconAngle = 0
             shoreAudio.wantsPlay = false
@@ -552,46 +516,106 @@ final class SpatialAudioEngine: ObservableObject {
             return
         }
 
-        // --- Project world position into camera-local space ---
-        if let wp = waypointWorldPosition {
-            let localPos = cam.inverse * simd_float4(wp.x, wp.y, wp.z, 1)
-            let rawAngle = atan2(localPos.x, -localPos.z) * 180 / .pi
+        // Handle deferred beacon placement
+        if waypointWorldPosition == nil, let pending = pendingBeaconRequest,
+           let cam = cameraManager {
+            let t = cam.latestTransform
+            if t != matrix_identity_float4x4 {
+                waypointWorldPosition = Self.computeWorldPosition(
+                    cameraTransform: t,
+                    relativeBearingDeg: pending.bearing,
+                    distance: pending.distance
+                )
+                pendingBeaconRequest = nil
+                print("[SpatialAudio] Deferred beacon placed at \(waypointWorldPosition!)")
+            }
+        }
+
+        var usedARKit = false
+
+        // PRIMARY: ARKit world tracking (Snapchat-style)
+        if let wp = waypointWorldPosition, let cam = cameraManager {
+            let t = cam.latestTransform
+            if t != matrix_identity_float4x4 {
+                let camPos = simd_float3(t.columns.3.x, t.columns.3.y, t.columns.3.z)
+                let fwd3 = simd_float2(-t.columns.2.x, -t.columns.2.z)
+                let toBeacon = simd_float2(wp.x - camPos.x, wp.z - camPos.z)
+                let bcnLen = simd_length(toBeacon)
+
+                if bcnLen > 0.01 {
+                    let fwdN = simd_normalize(fwd3)
+                    let bcnN = toBeacon / bcnLen
+                    let cross = fwdN.x * bcnN.y - fwdN.y * bcnN.x
+                    let dot = simd_dot(fwdN, bcnN)
+                    relativeBeaconAngle = atan2(cross, dot) * 180 / .pi
+                    beaconDistanceMeters = bcnLen
+                    usedARKit = true
+                }
+            }
+        }
+
+        // FALLBACK: compass + GPS bearing
+        if !usedARKit {
+            var bearingToBeacon: Float = worldBearingOfBeacon
+
+            if let beaconCoord = beaconCoordinate,
+               let userCoord = LocationManager.shared.currentCoordinate {
+                let speed = LocationManager.shared.currentSpeed
+                let rawBearing = Float(Self.bearing(from: userCoord, to: beaconCoord))
+                if speed < 0.5 {
+                    if !isGPSBearingLocked {
+                        lockedGPSBearing = smoothedGPSBearing
+                        isGPSBearingLocked = true
+                    }
+                    bearingToBeacon = lockedGPSBearing
+                } else {
+                    isGPSBearingLocked = false
+                    smoothedGPSBearing = Self.circularEMA(
+                        current: smoothedGPSBearing, target: rawBearing, alpha: 0.08
+                    )
+                    bearingToBeacon = smoothedGPSBearing
+                }
+                let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+                let beaconLoc = CLLocation(latitude: beaconCoord.latitude, longitude: beaconCoord.longitude)
+                let rawDist = Float(userLoc.distance(from: beaconLoc))
+                beaconDistanceMeters += (rawDist - beaconDistanceMeters) * 0.08
+            }
+            let rawRelative = Self.wrapAngle(bearingToBeacon - fusedHeadingDegrees)
             relativeBeaconAngle = Self.circularEMA(
-                current: relativeBeaconAngle,
-                target: Self.wrapAngle(rawAngle),
-                alpha: 0.5
+                current: relativeBeaconAngle, target: rawRelative, alpha: 0.15
             )
+        }
 
-            let camPos = simd_float3(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
-            let dist = simd_length(wp - camPos)
-            beaconDistanceMeters += (dist - beaconDistanceMeters) * 0.2
-
-            if beaconDistanceMeters < arrivalThresholdMeters {
+        // GPS arrival detection (works with both modes)
+        if let beaconCoord = beaconCoordinate,
+           let userCoord = LocationManager.shared.currentCoordinate {
+            let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
+            let beaconLoc = CLLocation(latitude: beaconCoord.latitude, longitude: beaconCoord.longitude)
+            let gpsDist = Float(userLoc.distance(from: beaconLoc))
+            if gpsDist < arrivalThresholdMeters {
                 clearBeacon()
                 AudioOrchestrator.shared.enqueue("You've arrived.", priority: .hazard)
                 return
             }
         }
 
-        // --- Audio spatialization ---
+        // Audio spatialization
         let rad = relativeBeaconAngle * Float.pi / 180
         let audioDist: Float = 4.0
         shrineNode?.position = AVAudio3DPoint(
             x: sinf(rad) * audioDist, y: 0, z: -cosf(rad) * audioDist
         )
 
-        // --- Shore audio (on-target zone ±20°) ---
         let inZone = abs(relativeBeaconAngle) < 20
         shoreAudio.wantsPlay = inZone
         shoreAudio.update()
         isOnTarget = shoreAudio.isPlaying
-
         shrinePing.targetVolume = shoreAudio.isPlaying ? 0 : 0.70
 
         posLogCount += 1
         if posLogCount % 120 == 1 {
-            let status = waypointWorldPosition != nil ? "placed" : (pendingBeacon != nil ? "pending" : "none")
-            print("[ShrinePos] rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m zone=\(inZone) wp=\(status)")
+            let mode = usedARKit ? "ARKit" : (beaconCoordinate != nil ? "GPS" : "compass")
+            print("[ShrinePos] [\(mode)] rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m wp=\(waypointWorldPosition != nil) engine=\(avEngine.isRunning)")
         }
     }
 
@@ -600,9 +624,6 @@ final class SpatialAudioEngine: ObservableObject {
     private func buildAudioGraph() {
         let mono = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
-        // Listener stays fixed at origin, facing forward.
-        // We move the SOURCE to pan it — much more reliable than
-        // rotating the listener via listenerAngularOrientation.
         avEngine.attach(environment)
         avEngine.connect(environment, to: avEngine.mainMixerNode, format: nil)
 
@@ -626,11 +647,8 @@ final class SpatialAudioEngine: ObservableObject {
         }
         avEngine.attach(node)
         avEngine.connect(node, to: environment, format: mono)
-        if #available(iOS 15, *) {
-            node.renderingAlgorithm = .HRTFHQ
-        } else {
-            node.renderingAlgorithm = .HRTF
-        }
+        if #available(iOS 15, *) { node.renderingAlgorithm = .HRTFHQ }
+        else { node.renderingAlgorithm = .HRTF }
         node.position = AVAudio3DPoint(x: 0, y: 0, z: -4)
         shrineNode = node
 
@@ -639,36 +657,34 @@ final class SpatialAudioEngine: ObservableObject {
         avEngine.attach(sightAssistSpeechPlayer)
         avEngine.connect(sightAssistSpeechPlayer, to: environment, format: mono)
         sightAssistSpeechPlayer.position = AVAudio3DPoint(x: 0, y: 0, z: -1.0)
-        if #available(iOS 15, *) {
-            sightAssistSpeechPlayer.renderingAlgorithm = .HRTFHQ
-        } else {
-            sightAssistSpeechPlayer.renderingAlgorithm = .HRTF
-        }
+        if #available(iOS 15, *) { sightAssistSpeechPlayer.renderingAlgorithm = .HRTFHQ }
+        else { sightAssistSpeechPlayer.renderingAlgorithm = .HRTF }
     }
 
+    // MARK: - Engine lifecycle
+
     private func startEngine() {
-        configureSessionIfNeeded()
-        if !avEngine.isRunning {
-            do {
-                try avEngine.start()
-            } catch {
-                print("[SpatialAudio] Engine start failed: \(error)")
-                isEnabled = false
-                return
-            }
+        forceSpatialAudioSession()
+        guard !avEngine.isRunning else { return }
+        do {
+            try avEngine.start()
+        } catch {
+            print("[SpatialAudio] Engine start failed: \(error)")
+            isEnabled = false
+            return
         }
         LocationManager.shared.requestPermissionAndStart()
         fusedHeadingDegrees = Float(LocationManager.shared.currentHeading)
+        startMotionTracking()
         haptics.start()
-        print("[SpatialAudio] Started — ARKit tracking active, heading=\(String(format: "%.0f", fusedHeadingDegrees))°")
+        print("[SpatialAudio] Started — Apple sensor fusion, heading=\(String(format: "%.0f", fusedHeadingDegrees))°")
     }
 
-    /// Only configure the audio session if it hasn't already been set up
-    /// (e.g., by Gemini's AudioManager). Avoids stomping on an active session.
-    private func configureSessionIfNeeded() {
+    /// Ensure mode=.default for HRTF. Skips entirely if session is already correct
+    /// to avoid route-change notification loops and disrupting Gemini.
+    private func forceSpatialAudioSession() {
         let session = AVAudioSession.sharedInstance()
-        if session.category == .playAndRecord {
-            print("[SpatialAudio] Session already configured (likely by Gemini), skipping")
+        if session.category == .playAndRecord && session.mode == .default {
             return
         }
         do {
@@ -677,9 +693,9 @@ final class SpatialAudioEngine: ObservableObject {
                 mode: .default,
                 options: [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker]
             )
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            try session.setActive(true)
             let route = session.currentRoute.outputs.map { "\($0.portName) (\($0.portType.rawValue))" }
-            print("[SpatialAudio] Session active — outputs: \(route)")
+            print("[SpatialAudio] Session reconfigured — outputs: \(route)")
         } catch {
             print("[SpatialAudio] Session configure failed: \(error)")
         }
@@ -690,16 +706,16 @@ final class SpatialAudioEngine: ObservableObject {
         shoreAudio.stop()
         isOnTarget = false
         beaconActive = false
-        beaconCoordinate = nil
         waypointWorldPosition = nil
-        pendingBeacon = nil
-        latestCameraTransform = nil
+        pendingBeaconRequest = nil
+        beaconCoordinate = nil
         activePath = nil
         rawPaths = []
         depthProfile = []
         beaconSustainProgress = 0
 
         haptics.stop()
+        motion.stopDeviceMotionUpdates()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             self?.avEngine.stop()
@@ -720,8 +736,7 @@ final class SpatialAudioEngine: ObservableObject {
             let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
                 .flatMap(AVAudioSession.InterruptionType.init) ?? .began
             if type == .ended {
-                self.configureSessionIfNeeded()
-                try? self.avEngine.start()
+                self.throttledRestart(reason: "interruption ended")
             }
         }
 
@@ -729,16 +744,11 @@ final class SpatialAudioEngine: ObservableObject {
             forName: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(),
             queue: .main
-        ) { [weak self] note in
+        ) { [weak self] _ in
             guard let self, self.isEnabled else { return }
-            let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
-                .flatMap(AVAudioSession.RouteChangeReason.init)
-            if reason == .categoryChange || reason == .override {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                    guard let self, self.isEnabled, !self.avEngine.isRunning else { return }
-                    self.configureSessionIfNeeded()
-                    try? self.avEngine.start()
-                }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.isEnabled, !self.avEngine.isRunning else { return }
+                self.throttledRestart(reason: "route change")
             }
         }
 
@@ -746,9 +756,8 @@ final class SpatialAudioEngine: ObservableObject {
             forName: UIApplication.willEnterForegroundNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            guard let self, self.isEnabled, !self.avEngine.isRunning else { return }
-            self.configureSessionIfNeeded()
-            try? self.avEngine.start()
+            guard let self, self.isEnabled else { return }
+            self.throttledRestart(reason: "foreground")
         }
 
         backgroundObserver = nc.addObserver(
@@ -758,10 +767,48 @@ final class SpatialAudioEngine: ObservableObject {
             guard let self else { return }
             self.shrinePing.targetVolume = 0
             self.haptics.stop()
+            self.motion.stopDeviceMotionUpdates()
             self.avEngine.stop()
         }
     }
 
-    // Motion tracking is now handled by ARKit via updateFromARFrame().
-    // CMMotionManager is no longer used for waypoint direction.
+    // MARK: - Apple sensor fusion (the same approach from commit 4401cab)
+
+    private var motionLogCount = 0
+
+    /// Uses Apple's .xMagneticNorthZVertical which runs an internal Kalman
+    /// filter across gyro + accelerometer + magnetometer. Updates at 60 Hz
+    /// and calls updateShrineNodePosition() DIRECTLY — no Task, no async.
+    private func startMotionTracking() {
+        guard motion.isDeviceMotionAvailable else {
+            print("[SpatialAudio] DeviceMotion NOT available")
+            return
+        }
+        motion.deviceMotionUpdateInterval = 1.0 / 60
+        motion.startDeviceMotionUpdates(using: .xMagneticNorthZVertical, to: .main) { [weak self] data, _ in
+            guard let self, let att = data?.attitude else { return }
+
+            // Apple's fusion: yaw=0 → magnetic north, increases CCW.
+            // Convert to compass: 0=north, increases CW.
+            var heading = Float(-att.yaw * 180.0 / .pi)
+            heading = Self.wrapAngle360(heading)
+
+            self.fusedHeadingDegrees = Self.circularEMA(
+                current: self.fusedHeadingDegrees,
+                target: heading,
+                alpha: 0.4
+            )
+            self.fusedHeadingDegrees = Self.wrapAngle360(self.fusedHeadingDegrees)
+
+            self.updateShrineNodePosition()
+
+            self.motionLogCount += 1
+            if self.motionLogCount % 120 == 1 {
+                let compass = LocationManager.shared.currentHeading
+                let speed = LocationManager.shared.currentSpeed
+                print("[Heading] fused=\(String(format: "%.0f", self.fusedHeadingDegrees))° apple=\(String(format: "%.0f", heading))° compass=\(String(format: "%.0f", compass))° speed=\(String(format: "%.1f", speed))m/s beacon=\(self.beaconActive) rel=\(String(format: "%.1f", self.relativeBeaconAngle))°")
+            }
+        }
+        print("[SpatialAudio] Apple sensor fusion started (.xMagneticNorthZVertical, 60 Hz)")
+    }
 }
