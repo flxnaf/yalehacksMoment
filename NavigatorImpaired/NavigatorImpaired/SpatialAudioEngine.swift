@@ -396,7 +396,6 @@ final class SpatialAudioEngine: ObservableObject {
         beaconActive = true
         shrinePing.targetVolume = 0.70
         relativeBeaconAngle = degrees
-        updateShrineNodePosition()
     }
 
     /// Compute a 3D world position from bearing + distance relative to the camera,
