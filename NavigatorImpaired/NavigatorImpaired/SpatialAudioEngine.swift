@@ -102,6 +102,107 @@ final class ShrinePingVoice {
     }
 }
 
+// MARK: - Shore Ambient Voice (on-target reward sound)
+
+/// Gentle ship's-bell chime over soft ocean waves — plays when the user
+/// is looking in the right direction (on-target). Think: arriving at a
+/// dock in a video game.
+///
+/// Bell: inharmonic metallic partials with long reverberant decay.
+/// Waves: band-filtered noise with slow amplitude modulation.
+final class ShoreAmbientVoice {
+
+    var targetVolume: Float = 0
+
+    private let sr: Float
+    private var currentVolume: Float = 0
+    private let slewRate: Float = 0.003
+
+    // Bell state
+    private var bellPhases: [Float] = [0, 0, 0, 0, 0]
+    private var bellEnvelope: Float = 0
+    private var bellCooldown: Int = 0
+    private var bellSamplesSinceLast: Int = 0
+    private let bellInterval: Int
+    private var bellTriggered: Bool = false
+
+    private let bellFreqs: [Float] = [
+        880.0,    // A5 — fundamental
+        1760.0,   // A6 — octave
+        2349.3,   // D7 — inharmonic (gives metallic quality)
+        3135.96,  // G7 — another inharmonic partial
+        4698.63,  // D8 — shimmer
+    ]
+    private let bellAmps: [Float] = [1.0, 0.5, 0.3, 0.15, 0.08]
+
+    // Ocean wave state
+    private var noiseState: UInt32 = 0xDEADBEEF
+    private var wavePhase: Float = 0
+    private let waveFreq: Float = 0.12
+    private var lpState: Float = 0
+
+    init(sampleRate: Float) {
+        self.sr = sampleRate
+        self.bellInterval = Int(3.5 * sampleRate)
+        self.bellSamplesSinceLast = bellInterval
+    }
+
+    func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
+        let tv = targetVolume
+        for i in 0..<frameCount {
+            currentVolume += (tv - currentVolume) * slewRate
+
+            var sample: Float = 0
+
+            // --- Ocean waves (always playing when volume > 0) ---
+            let noise = nextNoise()
+            lpState += (noise - lpState) * 0.002
+            let filteredNoise = lpState
+
+            wavePhase += waveFreq / sr
+            if wavePhase >= 1.0 { wavePhase -= 1.0 }
+            let waveMod = (sinf(2 * .pi * wavePhase) * 0.5 + 0.5)
+            let waveSecondary = (sinf(2 * .pi * wavePhase * 0.37 + 1.2) * 0.5 + 0.5) * 0.4
+            let waveEnv = waveMod + waveSecondary
+            sample += filteredNoise * waveEnv * 0.12
+
+            // --- Ship's bell chime ---
+            bellSamplesSinceLast += 1
+
+            if !bellTriggered && bellSamplesSinceLast >= bellInterval && currentVolume > 0.01 {
+                bellTriggered = true
+                bellEnvelope = 1.0
+                for j in 0..<bellPhases.count { bellPhases[j] = 0 }
+                bellSamplesSinceLast = 0
+            }
+
+            if bellTriggered {
+                var bellSample: Float = 0
+                for j in 0..<bellFreqs.count {
+                    bellSample += sinf(2 * .pi * bellPhases[j]) * bellAmps[j]
+                    bellPhases[j] += bellFreqs[j] / sr
+                    if bellPhases[j] >= 1.0 { bellPhases[j] -= 1.0 }
+                }
+                bellSample *= bellEnvelope / 2.0
+                bellEnvelope *= expf(-1.8 / sr)
+
+                if bellEnvelope < 0.001 {
+                    bellTriggered = false
+                    bellEnvelope = 0
+                }
+                sample += bellSample
+            }
+
+            buffer[i] = sample * currentVolume
+        }
+    }
+
+    private func nextNoise() -> Float {
+        noiseState = noiseState &* 1664525 &+ 1013904223
+        return Float(Int32(bitPattern: noiseState)) / Float(Int32.max)
+    }
+}
+
 // MARK: - SpatialAudioEngine
 
 /// Spatial audio engine with a single BOTW Sheikah Sensor ping.
@@ -161,6 +262,12 @@ final class SpatialAudioEngine: ObservableObject {
     private let shrinePing: ShrinePingVoice
     private var shrineNode: AVAudioSourceNode?
 
+    private let shoreAmbient: ShoreAmbientVoice
+    private var shoreNode: AVAudioSourceNode?
+
+    /// Whether the on-target shore ambient is currently playing.
+    @Published var isOnTarget: Bool = false
+
     let sightAssistSpeechPlayer = AVAudioPlayerNode()
 
     let haptics = NavigationHapticEngine()
@@ -205,6 +312,7 @@ final class SpatialAudioEngine: ObservableObject {
 
     init() {
         shrinePing = ShrinePingVoice(sampleRate: Float(sampleRate))
+        shoreAmbient = ShoreAmbientVoice(sampleRate: Float(sampleRate))
         buildAudioGraph()
         registerSessionObservers()
     }
@@ -262,6 +370,8 @@ final class SpatialAudioEngine: ObservableObject {
         beaconActive = false
         beaconCoordinate = nil
         shrinePing.targetVolume = 0
+        shoreAmbient.targetVolume = 0
+        isOnTarget = false
         beaconBearingDegrees = 0
         beaconDistanceMeters = 0
         beaconInitialDistance = 0
@@ -370,6 +480,8 @@ final class SpatialAudioEngine: ObservableObject {
     private func updateShrineNodePosition() {
         guard beaconActive else {
             relativeBeaconAngle = 0
+            shoreAmbient.targetVolume = 0
+            isOnTarget = false
             return
         }
 
@@ -426,12 +538,17 @@ final class SpatialAudioEngine: ObservableObject {
 
         shrineNode?.position = AVAudio3DPoint(x: x, y: 0, z: z)
 
+        // On-target: within ±8° → play shore ambient (bell + waves)
+        let onTarget = abs(relativeBeaconAngle) < 8
+        isOnTarget = onTarget
+        shoreAmbient.targetVolume = onTarget ? 0.55 : 0
+
         posLogCount += 1
         if posLogCount % 120 == 1 {
             let gpsMode = beaconCoordinate != nil ? "GPS" : "compass"
             let speed = LocationManager.shared.currentSpeed
             let locked = isGPSBearingLocked ? "LOCKED" : "live"
-            print("[ShrinePos] [\(gpsMode)|\(locked)] heading=\(String(format: "%.0f", fusedHeadingDegrees))° bearing=\(String(format: "%.0f", bearingToBeacon))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m speed=\(String(format: "%.1f", speed))m/s")
+            print("[ShrinePos] [\(gpsMode)|\(locked)] heading=\(String(format: "%.0f", fusedHeadingDegrees))° bearing=\(String(format: "%.0f", bearingToBeacon))° rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m speed=\(String(format: "%.1f", speed))m/s onTarget=\(onTarget)")
         }
     }
 
@@ -473,6 +590,22 @@ final class SpatialAudioEngine: ObservableObject {
         }
         node.position = AVAudio3DPoint(x: 0, y: 0, z: -4)
         shrineNode = node
+
+        // Shore ambient (on-target reward): centered ahead, non-spatialized so it
+        // feels like a gentle ambient wash rather than a point source.
+        let shore = shoreAmbient
+        let shNode = AVAudioSourceNode(format: mono) { [shore] _, _, frameCount, abl in
+            let ptr = UnsafeMutableAudioBufferListPointer(abl)
+            if let buf = ptr.first?.mData?.assumingMemoryBound(to: Float.self) {
+                shore.render(into: buf, frameCount: Int(frameCount))
+            }
+            return noErr
+        }
+        avEngine.attach(shNode)
+        avEngine.connect(shNode, to: environment, format: mono)
+        shNode.renderingAlgorithm = .equalPowerPanning
+        shNode.position = AVAudio3DPoint(x: 0, y: 0, z: -1)
+        shoreNode = shNode
 
         avEngine.attach(sightAssistSpeechPlayer)
         avEngine.connect(sightAssistSpeechPlayer, to: environment, format: mono)
@@ -519,6 +652,8 @@ final class SpatialAudioEngine: ObservableObject {
 
     private func stopEngine() {
         shrinePing.targetVolume = 0
+        shoreAmbient.targetVolume = 0
+        isOnTarget = false
         beaconActive = false
         beaconCoordinate = nil
         activePath = nil
