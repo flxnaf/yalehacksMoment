@@ -8,14 +8,14 @@ final class GuardianAlertManager: NSObject, ObservableObject, CLLocationManagerD
     static let shared = GuardianAlertManager()
 
     private static let configKey = "guardianConfig"
-    static let imgbbKeyDefaults = "imgbbApiKey"
     static let gx10BaseURLKey = "gx10BaseURL"
     static let gx10ModelKey = "gx10Model"
+    static let sendGridRelayBaseURLKey = "sendGridRelayBaseURL"
+    static let sendGridRelaySecretKey = "sendGridRelaySecret"
 
     private let locationManager = CLLocationManager()
     private(set) var currentLocation: CLLocation?
 
-    /// True during the 10s pre-send countdown (fall or SOS). Drives cancel overlay in `StreamView`.
     @Published private(set) var isCountdownActive = false
 
     private var fallFrame: UIImage?
@@ -28,6 +28,7 @@ final class GuardianAlertManager: NSObject, ObservableObject, CLLocationManagerD
     private let urlSession: URLSession = {
         let c = URLSessionConfiguration.default
         c.timeoutIntervalForRequest = 120
+        c.timeoutIntervalForResource = 180
         return URLSession(configuration: c)
     }()
 
@@ -44,7 +45,6 @@ final class GuardianAlertManager: NSObject, ObservableObject, CLLocationManagerD
         UserDefaults.standard.set(data, forKey: Self.configKey)
     }
 
-    /// Removes persisted guardian contact / Twilio settings (e.g. user cleared all fields in Settings).
     func clearGuardianConfig() {
         UserDefaults.standard.removeObject(forKey: Self.configKey)
     }
@@ -116,26 +116,22 @@ final class GuardianAlertManager: NSObject, ObservableObject, CLLocationManagerD
             return
         }
 
+        // Only call GX10 when the user saved a base URL; otherwise we used to hit 127.0.0.1 on-device and
+        // could block the whole alert on a 120s URLSession timeout. Always cap vision latency so email sends.
         var sceneText = ""
-        if let frame, let data = frame.jpegData(compressionQuality: 0.75) {
-            do {
-                sceneText = try await GX10InferenceClient.shared.describeImage(
-                    imageData: data,
-                    prompt: "Describe this scene in one sentence for an emergency contact. Focus on where the person is and what's around them."
-                )
-            } catch {
-                sceneText = ""
-            }
-        }
-
-        var imageURL: String?
-        if let key = UserDefaults.standard.string(forKey: Self.imgbbKeyDefaults), !key.isEmpty,
-           let frame, let jpeg = frame.jpegData(compressionQuality: 0.75) {
-            imageURL = await uploadImgbb(jpeg: jpeg, apiKey: key)
+        if let frame, let data = frame.jpegData(compressionQuality: 0.75),
+           Self.isGX10ExplicitlyConfigured() {
+            sceneText = await Self.sceneDescriptionForFallAlert(imageData: data)
         }
 
         let timeStr = Self.shortDateTime.string(from: Date())
         let locStr = Self.formatMapsLink(location: currentLocation)
+
+        let snapshotJPEG: Data? = {
+            guard let frame else { return nil }
+            guard let data = frame.jpegData(compressionQuality: 0.82), !data.isEmpty else { return nil }
+            return data
+        }()
 
         var message = """
         🚨 SightAssist Fall Alert
@@ -147,118 +143,371 @@ final class GuardianAlertManager: NSObject, ObservableObject, CLLocationManagerD
         if !sceneText.isEmpty {
             message += "\n📷 Last scene: \(sceneText)"
         }
+        if snapshotJPEG != nil {
+            message += "\n\n📎 A JPEG of the last camera frame is attached to this email."
+        } else {
+            message += "\n\n⚠️ Camera frame unavailable — email has no photo attachment."
+        }
         message += "\n\nReply SAFE if they are okay."
 
-        async let twilioOK = sendTwilioSMS(config: config, body: message, mediaURL: imageURL)
-        async let bridgeOK = sendViaSightAssistBridge(config: config, message: message)
+        let smsBody = Self.fallAlertSMSBody(config: config, timeStr: timeStr, locStr: locStr, sceneText: sceneText)
 
-        let (tOk, bOk) = await (twilioOK, bridgeOK)
+        let emailOk = await sendFallAlertEmailViaNodeRelay(config: config, message: message, jpegAttachment: snapshotJPEG)
 
-        if tOk || bOk {
-            AudioOrchestrator.shared.enqueue("Guardian alerted. Help is on the way.", priority: .hazard)
-            onAlertSent?(message)
+        let phone = config.guardianPhone.trimmingCharacters(in: .whitespacesAndNewlines)
+        let smsOk: Bool
+        if phone.isEmpty {
+            smsOk = false
         } else {
+            smsOk = await SightAssistBridge.sendTextMessage(phone: phone, body: smsBody)
+        }
+
+        let whatsappJPEG: Data? = {
+            guard let frame else { return nil }
+            return GuardianAlertManager.jpegDataForOpenClawFallAlert(from: frame)
+        }()
+        let whatsappOk = await sendFallAlertWhatsAppViaOpenClaw(config: config, jpegForWhatsApp: whatsappJPEG)
+
+        let anyOk = emailOk || smsOk || whatsappOk
+        if !anyOk {
             AudioOrchestrator.shared.enqueue("Alert failed to send. Please call for help manually.", priority: .hazard)
             onAlertSent?("")
+            return
+        }
+
+        onAlertSent?(message)
+
+        if emailOk, smsOk, whatsappOk {
+            AudioOrchestrator.shared.enqueue("Guardian alerted by email, text, and WhatsApp.", priority: .hazard)
+        } else if emailOk, smsOk {
+            AudioOrchestrator.shared.enqueue("Guardian alerted by email and text.", priority: .hazard)
+        } else if emailOk, whatsappOk {
+            AudioOrchestrator.shared.enqueue("Guardian alerted by email and WhatsApp.", priority: .hazard)
+        } else if smsOk, whatsappOk {
+            AudioOrchestrator.shared.enqueue("Guardian alerted by text and WhatsApp.", priority: .hazard)
+        } else if whatsappOk {
+            AudioOrchestrator.shared.enqueue("Guardian alerted on WhatsApp.", priority: .hazard)
+        } else if emailOk {
+            if phone.isEmpty {
+                AudioOrchestrator.shared.enqueue("Guardian alerted. Help is on the way.", priority: .hazard)
+            } else {
+                AudioOrchestrator.shared.enqueue(
+                    "Guardian emailed. Send the text message if Messages opened with a draft.",
+                    priority: .hazard
+                )
+            }
+        } else if smsOk {
+            AudioOrchestrator.shared.enqueue(
+                "Email could not be sent. Text to your guardian was sent or opened in Messages.",
+                priority: .hazard
+            )
         }
     }
 
-    private func sendViaSightAssistBridge(config: GuardianConfig, message: String) async -> Bool {
-        let bridge = SightAssistBridge()
-        let result = await bridge.handleCallAsync(
-            method: "sendMessage",
-            params: ["contactName": config.name, "message": message]
-        )
-        return (result["success"] as? Bool) == true
-    }
+    /// OpenClaw gateway tool `fall_alert` (register `skills/fall_alert.js` or equivalent on the gateway).
+    private func sendFallAlertWhatsAppViaOpenClaw(config: GuardianConfig, jpegForWhatsApp: Data?) async -> Bool {
+        let wa = config.guardianWhatsApp.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ocConfigured = GeminiConfig.isOpenClawConfigured
 
-    private func sendTwilioSMS(config: GuardianConfig, body: String, mediaURL: String?) async -> Bool {
-        let sid = config.twilioAccountSid.trimmingCharacters(in: .whitespacesAndNewlines)
-        let from = config.twilioFromNumber.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sid.isEmpty, !config.twilioAuthToken.isEmpty, !from.isEmpty else { return false }
+        guard !wa.isEmpty, ocConfigured else {
+            let skipReason: String
+            if wa.isEmpty { skipReason = "guardianWhatsApp_empty" }
+            else if !ocConfigured { skipReason = "openclaw_not_configured" }
+            else { skipReason = "unknown" }
+            NSLog(
+                "[GuardianAlert] WhatsApp fall_alert skipped (%@) waEmpty=%@ openClawConfigured=%@",
+                skipReason,
+                wa.isEmpty ? "YES" : "NO",
+                ocConfigured ? "YES" : "NO"
+            )
+            return false
+        }
 
-        var parts: [String] = [
-            formURLEncode("To", config.phoneNumber),
-            formURLEncode("From", from),
-            formURLEncode("Body", body),
+        let who = config.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let contactName = who.isEmpty ? "SightAssist user" : who
+        let locPair: String = {
+            guard let loc = currentLocation else { return "" }
+            let lat = String(format: "%.6f", loc.coordinate.latitude)
+            let lng = String(format: "%.6f", loc.coordinate.longitude)
+            return "\(lat),\(lng)"
+        }()
+
+        var args: [String: Any] = [
+            "contact_name": contactName,
+            "contact_number": wa,
+            "location": locPair,
         ]
-        if let mediaURL, !mediaURL.isEmpty {
-            parts.append(formURLEncode("MediaUrl", mediaURL))
-        }
-        let form = parts.joined(separator: "&")
-
-        guard let url = URL(string: "https://api.twilio.com/2010-04-01/Accounts/\(sid)/Messages.json") else {
-            return false
+        if let jpeg = jpegForWhatsApp, !jpeg.isEmpty {
+            args["image_jpeg_base64"] = jpeg.base64EncodedString()
         }
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        let auth = Data("\(sid):\(config.twilioAuthToken)".utf8).base64EncodedString()
-        req.setValue("Basic \(auth)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        req.httpBody = Data(form.utf8)
+        let bridge = OpenClawBridge()
+        let result = await bridge.invokeTool(
+            name: "fall_alert",
+            args: args
+        )
 
-        do {
-            let (data, response) = try await urlSession.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return false }
-            if http.statusCode == 201 { return true }
-            #if DEBUG
-            let bodyStr = String(data: data, encoding: .utf8) ?? ""
-            print("[GuardianAlert] Twilio HTTP \(http.statusCode): \(String(bodyStr.prefix(500)))")
-            #endif
-            return false
-        } catch {
-            #if DEBUG
-            print("[GuardianAlert] Twilio request error: \(error)")
-            #endif
-            return false
+        if result.ok {
+            NSLog("[GuardianAlert] fall_alert tool: %@", String(result.detail.prefix(200)))
+            return true
         }
+        NSLog("[GuardianAlert] fall_alert tool failed: %@", result.detail)
+        return false
     }
 
-    private func uploadImgbb(jpeg: Data, apiKey: String) async -> String? {
-        let boundary = "Boundary-\(UUID().uuidString)"
-        var c = URLComponents(string: "https://api.imgbb.com/1/upload")
-        c?.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-        guard let url = c?.url else { return nil }
+    private static func fallAlertSMSBody(config: GuardianConfig, timeStr: String, locStr: String, sceneText: String) -> String {
+        let who = config.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = who.isEmpty ? "SightAssist user" : who
+        var s = """
+🚨 FALL ALERT
+Person: \(label)
+Time: \(timeStr)
+Location: \(locStr)
+"""
+        if !sceneText.isEmpty {
+            s += "\nScene: \(String(sceneText.prefix(100)))"
+        }
+        s += "\n\nReply SAFE if they are okay."
+        return s
+    }
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+    private struct FallRelayPayload: Encodable {
+        let to: String
+        let toName: String
+        let subject: String
+        let text: String
+        let attachments: [FallRelayAttachment]?
+    }
 
-        var body = Data()
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append(
-            "Content-Disposition: form-data; name=\"image\"; filename=\"frame.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n"
-                .data(using: .utf8)!
-        )
-        body.append(jpeg)
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-        req.httpBody = body
+    private struct FallRelayAttachment: Encodable {
+        let content: String
+        let filename: String
+        let type: String
+    }
 
-        do {
-            let (data, response) = try await urlSession.data(for: req)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                return nil
+    private enum SceneDescriptionRace: Sendable {
+        case text(String)
+        case timedOut
+    }
+
+    private static func isGX10ExplicitlyConfigured() -> Bool {
+        let raw = UserDefaults.standard.string(forKey: gx10BaseURLKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !raw.isEmpty
+    }
+
+    /// Smaller JPEG for `POST /tools/invoke` JSON (same scene as email: last Gemini / camera frame).
+    private static let maxOpenClawFallImageBytes = 450_000
+
+    private static func jpegDataForOpenClawFallAlert(from image: UIImage) -> Data? {
+        var img = image
+        let maxEdge: CGFloat = 1024
+        let w = img.size.width * img.scale
+        let h = img.size.height * img.scale
+        guard w > 0, h > 0 else { return nil }
+        if max(w, h) > maxEdge {
+            let scale = maxEdge / max(w, h)
+            let newSize = CGSize(width: floor(w * scale), height: floor(h * scale))
+            let renderer = UIGraphicsImageRenderer(size: newSize)
+            img = renderer.image { _ in
+                img.draw(in: CGRect(origin: .zero, size: newSize))
             }
-            guard
-                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let dataObj = json["data"] as? [String: Any],
-                let urlStr = dataObj["url"] as? String
-            else {
-                return nil
-            }
-            return urlStr
-        } catch {
+        }
+        var quality: CGFloat = 0.72
+        guard var data = img.jpegData(compressionQuality: quality) else { return nil }
+        while data.count > maxOpenClawFallImageBytes && quality > 0.35 {
+            quality -= 0.08
+            guard let next = img.jpegData(compressionQuality: quality) else { break }
+            data = next
+        }
+        if data.count > maxOpenClawFallImageBytes {
             return nil
         }
+        return data
     }
 
-    private func formURLEncode(_ key: String, _ value: String) -> String {
-        var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "&+=?")
-        let k = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
-        let v = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-        return "\(k)=\(v)"
+    /// First completion wins: GX10 description (errors → empty string) or hard timeout so relay email is never starved.
+    private static func sceneDescriptionForFallAlert(imageData: Data) async -> String {
+        let prompt =
+            "Describe this scene in one sentence for an emergency contact. Focus on where the person is and what's around them."
+        let capNs: UInt64 = 15_000_000_000
+        return await withTaskGroup(of: SceneDescriptionRace.self) { group in
+            group.addTask {
+                do {
+                    let s = try await GX10InferenceClient.shared.describeImage(imageData: imageData, prompt: prompt)
+                    return .text(s)
+                } catch {
+                    return .text("")
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: capNs)
+                return .timedOut
+            }
+            guard let first = await group.next() else {
+                return ""
+            }
+            group.cancelAll()
+            switch first {
+            case .text(let s):
+                return s
+            case .timedOut:
+                return ""
+            }
+        }
+    }
+
+    /// POST to Node `sgQuickstart`: SendGrid sends plain text + optional JPEG attachment (base64).
+    private func sendFallAlertEmailViaNodeRelay(
+        config: GuardianConfig,
+        message: String,
+        jpegAttachment: Data?
+    ) async -> Bool {
+        let baseRaw = UserDefaults.standard.string(forKey: Self.sendGridRelayBaseURLKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !baseRaw.isEmpty else {
+            NSLog("[GuardianAlert] Fall email skipped: relay URL empty — set Settings → fall alert relay URL (e.g. http://YOUR_MAC_IP:8787)")
+            return false
+        }
+
+        let to = config.guardianEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !to.isEmpty else {
+            NSLog("[GuardianAlert] Fall email skipped: guardian email empty")
+            return false
+        }
+
+        if let issue = Self.relayURLHostValidationIssue(baseRaw: baseRaw) {
+            NSLog("[GuardianAlert] Fall email skipped: %@", issue)
+            return false
+        }
+
+        guard let url = Self.fallAlertRelayEndpointURL(baseRaw: baseRaw) else {
+            NSLog("[GuardianAlert] Fall email skipped: invalid relay URL %@", baseRaw)
+            return false
+        }
+
+        let timeStr = Self.shortDateTime.string(from: Date())
+        let subject = "SightAssist Fall Alert – \(timeStr)"
+
+        var attachments: [FallRelayAttachment]?
+        if let jpeg = jpegAttachment {
+            attachments = [
+                FallRelayAttachment(
+                    content: jpeg.base64EncodedString(),
+                    filename: "sightassist_fall_\(Int(Date().timeIntervalSince1970)).jpg",
+                    type: "image/jpeg"
+                ),
+            ]
+        }
+
+        let displayName = config.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload = FallRelayPayload(
+            to: to,
+            toName: displayName.isEmpty ? "Guardian" : displayName,
+            subject: subject,
+            text: message,
+            attachments: attachments
+        )
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let secret = UserDefaults.standard.string(forKey: Self.sendGridRelaySecretKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !secret.isEmpty {
+            req.setValue(secret, forHTTPHeaderField: "X-Relay-Secret")
+        }
+
+        do {
+            req.httpBody = try JSONEncoder().encode(payload)
+            let (data, response) = try await urlSession.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return false }
+            if http.statusCode == 202 {
+                NSLog("[GuardianAlert] Fall email sent (HTTP 202), attachment=%@", attachments != nil ? "yes" : "no")
+                return true
+            }
+            NSLog("[GuardianAlert] Fall email failed HTTP %d", http.statusCode)
+            switch http.statusCode {
+            case 401:
+                NSLog(
+                    "[GuardianAlert] hint: relay rejected the secret — Settings “Relay shared secret” must exactly match sgQuickstart/.env RELAY_SECRET, or clear both."
+                )
+            case 400:
+                NSLog("[GuardianAlert] hint: relay said bad request — check guardian email in Settings.")
+            case 500:
+                NSLog(
+                    "[GuardianAlert] hint: relay server error — on the Mac, confirm .env has SENDGRID_API_KEY and SENDGRID_FROM_EMAIL; read the terminal stack trace."
+                )
+            default:
+                break
+            }
+            if let s = String(data: data, encoding: .utf8), !s.isEmpty {
+                NSLog("[GuardianAlert] relay response body: %@", String(s.prefix(500)))
+            }
+            return false
+        } catch {
+            NSLog("[GuardianAlert] relay request failed: %@", error.localizedDescription)
+            Self.logRelayFailureHints(error: error)
+            return false
+        }
+    }
+
+    private static func logRelayFailureHints(error: Error) {
+        var err: NSError? = error as NSError
+        var depth = 0
+        while let e = err, depth < 6 {
+            if e.userInfo["_NSURLErrorPrivacyProxyFailureKey"] as? Bool == true {
+                NSLog(
+                    "[GuardianAlert] hint: iCloud Private Relay (or a privacy proxy) is blocking your Mac’s LAN IP — Settings → Apple ID → iCloud → Private Relay → Off while testing, or disconnect from networks that force relay."
+                )
+            }
+            let path = (e.userInfo["_NSURLErrorNWPathKey"] as? String) ?? ""
+            if path.contains("Local network prohibited") {
+                NSLog(
+                    "[GuardianAlert] hint: Local Network access is denied — Settings → Privacy & Security → Local Network → enable this app."
+                )
+            }
+            err = e.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+    }
+
+    /// Catches hosts that ATS blocks or that cannot reach the Mac relay from an iPhone (e.g. copy-paste from `npm start` showing `0.0.0.0`).
+    private static func relayURLHostValidationIssue(baseRaw: String) -> String? {
+        var s = baseRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        if !s.contains("://") {
+            s = "http://" + s
+        }
+        while s.last == "/" {
+            s.removeLast()
+        }
+        guard let url = URL(string: s), let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else {
+            return nil
+        }
+        if scheme == "https" {
+            return "relay URL must use http:// — sgQuickstart has no TLS on port 8787. Example: http://192.168.1.42:8787"
+        }
+        if host == "0.0.0.0" {
+            return "relay URL uses 0.0.0.0 — that is only where the Mac listens, not an address the phone can use. Set Settings to http://YOUR_MAC_LAN_IP:8787 (e.g. from System Settings → Network)."
+        }
+        if host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]" {
+            return "relay URL uses loopback — on the phone that means the phone itself, not your Mac. Use your Mac’s LAN IP (e.g. http://192.168.1.5:8787)."
+        }
+        return nil
+    }
+
+    /// Base URL from Settings (e.g. `http://192.168.1.5:8787`) → POST endpoint. Accepts optional `/fall-alert` suffix so we never double-append.
+    private static func fallAlertRelayEndpointURL(baseRaw: String) -> URL? {
+        var s = baseRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        while s.last == "/" {
+            s.removeLast()
+        }
+        let suffix = "/fall-alert"
+        if s.lowercased().hasSuffix(suffix) {
+            return URL(string: s)
+        }
+        return URL(string: s + suffix)
     }
 
     private static let shortDateTime: DateFormatter = {

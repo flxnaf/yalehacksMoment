@@ -1,4 +1,5 @@
 import AVFoundation
+import Foundation
 import UIKit
 
 /// Priority for spoken output: higher values preempt ordering when dequeuing.
@@ -17,6 +18,7 @@ enum SpeechPriority: Int, Comparable, CaseIterable {
 /// otherwise spins up a dedicated `AVAudioEngine` + `AVAudioEnvironmentNode` graph.
 ///
 /// Uses `AVSpeechSynthesizer.write(_:toBufferCallback:)` so PCM is scheduled on `AVAudioPlayerNode` in 3D space (not plain `speak(_:)` routing).
+/// `.hazard` speech (fall / SOS) uses ElevenLabs when `Secrets.elevenLabsAPIKey` is set, same spatial graph via `scheduleFile` on MP3 from the API.
 @MainActor
 final class AudioOrchestrator {
     static let shared = AudioOrchestrator()
@@ -49,7 +51,16 @@ final class AudioOrchestrator {
     /// Bumped on `stopAllSpeech` and each new utterance so TTS `write` / playback callbacks ignore stale work after cancel.
     private var speechSession: UInt64 = 0
 
-    private init() {}
+    private init() {
+        if Self.isElevenLabsConfigured {
+            ElevenLabsTTSClient.shared.prewarm()
+        }
+    }
+
+    private static var isElevenLabsConfigured: Bool {
+        let k = Secrets.elevenLabsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !k.isEmpty && k != "YOUR_ELEVENLABS_API_KEY"
+    }
 
     func enqueue(_ text: String, priority: SpeechPriority) {
         backlog.append(Item(text: text, priority: priority, sequence: nextSequence))
@@ -75,7 +86,7 @@ final class AudioOrchestrator {
         guard !isSpeaking else { return }
         guard let next = dequeueHighestPriority() else { return }
         isSpeaking = true
-        playThroughSpatialPipeline(text: next.text)
+        playThroughSpatialPipeline(text: next.text, priority: next.priority)
     }
 
     private func dequeueHighestPriority() -> Item? {
@@ -149,7 +160,7 @@ final class AudioOrchestrator {
         }
     }
 
-    private func playThroughSpatialPipeline(text: String) {
+    private func playThroughSpatialPipeline(text: String, priority: SpeechPriority) {
         speechSession += 1
         let session = speechSession
 
@@ -163,6 +174,17 @@ final class AudioOrchestrator {
         synthesisFinished = false
         buffersPendingPlayback = 0
 
+        if priority == .hazard, Self.isElevenLabsConfigured {
+            Task { @MainActor in
+                await self.playElevenLabsHazard(text: text, session: session)
+            }
+            return
+        }
+
+        playSystemTTSSpatial(text: text, session: session, player: player)
+    }
+
+    private func playSystemTTSSpatial(text: String, session: UInt64, player: AVAudioPlayerNode) {
         let utterance = AVSpeechUtterance(string: text)
         speechSynth.write(utterance) { [weak self] buffer in
             guard let self else { return }
@@ -175,6 +197,65 @@ final class AudioOrchestrator {
                 self.synthesisFinished = true
                 self.tryCompleteUtterance(session: session)
             }
+        }
+    }
+
+    /// ElevenLabs returns MPEG audio; decode via `AVAudioFile` and play on the same 3D player node as system TTS.
+    private func playElevenLabsHazard(text: String, session: UInt64) async {
+        do {
+            let data = try await ElevenLabsTTSClient.shared.audioData(for: text)
+            guard session == speechSession else {
+                finishCurrentUtterance()
+                return
+            }
+            configureSession()
+            let player = resolvePlayer()
+            guard startEngineIfNeeded(for: player) else {
+                finishCurrentUtterance()
+                return
+            }
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("el-hazard-\(UUID().uuidString).mp3")
+            try data.write(to: url)
+            let file: AVAudioFile
+            do {
+                file = try AVAudioFile(forReading: url)
+            } catch {
+                try? FileManager.default.removeItem(at: url)
+                throw error
+            }
+            guard session == speechSession else {
+                try? FileManager.default.removeItem(at: url)
+                finishCurrentUtterance()
+                return
+            }
+            player.scheduleFile(file, at: nil) { [weak self] in
+                try? FileManager.default.removeItem(at: url)
+                Task { @MainActor in
+                    guard let self else { return }
+                    guard session == self.speechSession else { return }
+                    self.finishCurrentUtterance()
+                }
+            }
+            if !player.isPlaying {
+                player.play()
+            }
+        } catch {
+            guard session == speechSession else {
+                finishCurrentUtterance()
+                return
+            }
+            #if DEBUG
+            print("[AudioOrchestrator] ElevenLabs hazard TTS failed (\(error.localizedDescription)); using system voice")
+            #endif
+            configureSession()
+            let player = resolvePlayer()
+            guard startEngineIfNeeded(for: player) else {
+                finishCurrentUtterance()
+                return
+            }
+            synthesisFinished = false
+            buffersPendingPlayback = 0
+            playSystemTTSSpatial(text: text, session: session, player: player)
         }
     }
 

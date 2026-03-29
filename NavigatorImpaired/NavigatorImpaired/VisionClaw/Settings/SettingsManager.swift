@@ -21,6 +21,14 @@ final class SettingsManager {
 
   private init() {}
 
+  /// Values saved from the template should not override real defaults in `Secrets.swift`.
+  private static func isOpenClawHostPlaceholder(_ raw: String) -> Bool {
+    let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return s == "http://YOUR_MAC_HOSTNAME.local" || s == "https://YOUR_MAC_HOSTNAME.local"
+  }
+
+  private static let openClawGatewayTokenPlaceholder = "YOUR_OPENCLAW_GATEWAY_TOKEN"
+
   // MARK: - Gemini
 
   var geminiAPIKey: String {
@@ -36,7 +44,14 @@ final class SettingsManager {
   // MARK: - OpenClaw
 
   var openClawHost: String {
-    get { defaults.string(forKey: Key.openClawHost.rawValue) ?? Secrets.openClawHost }
+    get {
+      // Empty or template host in UserDefaults must not mask Secrets.
+      if let s = defaults.string(forKey: Key.openClawHost.rawValue), !s.isEmpty,
+         !Self.isOpenClawHostPlaceholder(s) {
+        return s
+      }
+      return Secrets.openClawHost
+    }
     set { defaults.set(newValue, forKey: Key.openClawHost.rawValue) }
   }
 
@@ -49,12 +64,21 @@ final class SettingsManager {
   }
 
   var openClawHookToken: String {
-    get { defaults.string(forKey: Key.openClawHookToken.rawValue) ?? Secrets.openClawHookToken }
+    get {
+      if let s = defaults.string(forKey: Key.openClawHookToken.rawValue), !s.isEmpty { return s }
+      return Secrets.openClawHookToken
+    }
     set { defaults.set(newValue, forKey: Key.openClawHookToken.rawValue) }
   }
 
   var openClawGatewayToken: String {
-    get { defaults.string(forKey: Key.openClawGatewayToken.rawValue) ?? Secrets.openClawGatewayToken }
+    get {
+      if let s = defaults.string(forKey: Key.openClawGatewayToken.rawValue), !s.isEmpty {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t != Self.openClawGatewayTokenPlaceholder { return t }
+      }
+      return Secrets.openClawGatewayToken
+    }
     set { defaults.set(newValue, forKey: Key.openClawGatewayToken.rawValue) }
   }
 

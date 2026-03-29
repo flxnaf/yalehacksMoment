@@ -13,27 +13,8 @@
 		BED202F42F758F8300B0C0A4 /* MWDATMockDevice in Frameworks */ = {isa = PBXBuildFile; productRef = BED202F32F758F8300B0C0A4 /* MWDATMockDevice */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXContainerItemProxy section */
-		BED202BF2F758B0600B0C0A4 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = BED202A92F758B0500B0C0A4 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = BED202B02F758B0500B0C0A4;
-			remoteInfo = NavigatorImpaired;
-		};
-		BED202C92F758B0600B0C0A4 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = BED202A92F758B0500B0C0A4 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = BED202B02F758B0500B0C0A4;
-			remoteInfo = NavigatorImpaired;
-		};
-/* End PBXContainerItemProxy section */
-
 /* Begin PBXFileReference section */
 		BED202B12F758B0500B0C0A4 /* NavigatorImpaired.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NavigatorImpaired.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		BED202BE2F758B0600B0C0A4 /* NavigatorImpairedTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NavigatorImpairedTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		BED202C82F758B0600B0C0A4 /* NavigatorImpairedUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NavigatorImpairedUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -66,20 +47,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		BED202BB2F758B0600B0C0A4 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		BED202C52F758B0600B0C0A4 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -98,8 +65,6 @@
 			isa = PBXGroup;
 			children = (
 				BED202B12F758B0500B0C0A4 /* NavigatorImpaired.app */,
-				BED202BE2F758B0600B0C0A4 /* NavigatorImpairedTests.xctest */,
-				BED202C82F758B0600B0C0A4 /* NavigatorImpairedUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -140,52 +105,6 @@
 			productReference = BED202B12F758B0500B0C0A4 /* NavigatorImpaired.app */;
 			productType = "com.apple.product-type.application";
 		};
-		BED202BD2F758B0600B0C0A4 /* NavigatorImpairedTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = BED202D52F758B0600B0C0A4 /* Build configuration list for PBXNativeTarget "NavigatorImpairedTests" */;
-			buildPhases = (
-				BED202BA2F758B0600B0C0A4 /* Sources */,
-				BED202BB2F758B0600B0C0A4 /* Frameworks */,
-				BED202BC2F758B0600B0C0A4 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				BED202C02F758B0600B0C0A4 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				BED202C12F758B0600B0C0A4 /* NavigatorImpairedTests */,
-			);
-			name = NavigatorImpairedTests;
-			packageProductDependencies = (
-			);
-			productName = NavigatorImpairedTests;
-			productReference = BED202BE2F758B0600B0C0A4 /* NavigatorImpairedTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
-		BED202C72F758B0600B0C0A4 /* NavigatorImpairedUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = BED202D82F758B0600B0C0A4 /* Build configuration list for PBXNativeTarget "NavigatorImpairedUITests" */;
-			buildPhases = (
-				BED202C42F758B0600B0C0A4 /* Sources */,
-				BED202C52F758B0600B0C0A4 /* Frameworks */,
-				BED202C62F758B0600B0C0A4 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				BED202CA2F758B0600B0C0A4 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				BED202CB2F758B0600B0C0A4 /* NavigatorImpairedUITests */,
-			);
-			name = NavigatorImpairedUITests;
-			packageProductDependencies = (
-			);
-			productName = NavigatorImpairedUITests;
-			productReference = BED202C82F758B0600B0C0A4 /* NavigatorImpairedUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -198,14 +117,6 @@
 				TargetAttributes = {
 					BED202B02F758B0500B0C0A4 = {
 						CreatedOnToolsVersion = 16.4;
-					};
-					BED202BD2F758B0600B0C0A4 = {
-						CreatedOnToolsVersion = 16.4;
-						TestTargetID = BED202B02F758B0500B0C0A4;
-					};
-					BED202C72F758B0600B0C0A4 = {
-						CreatedOnToolsVersion = 16.4;
-						TestTargetID = BED202B02F758B0500B0C0A4;
 					};
 				};
 			};
@@ -228,28 +139,12 @@
 			projectRoot = "";
 			targets = (
 				BED202B02F758B0500B0C0A4 /* NavigatorImpaired */,
-				BED202BD2F758B0600B0C0A4 /* NavigatorImpairedTests */,
-				BED202C72F758B0600B0C0A4 /* NavigatorImpairedUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		BED202AF2F758B0500B0C0A4 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		BED202BC2F758B0600B0C0A4 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		BED202C62F758B0600B0C0A4 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -266,34 +161,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		BED202BA2F758B0600B0C0A4 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		BED202C42F758B0600B0C0A4 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		BED202C02F758B0600B0C0A4 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = BED202B02F758B0500B0C0A4 /* NavigatorImpaired */;
-			targetProxy = BED202BF2F758B0600B0C0A4 /* PBXContainerItemProxy */;
-		};
-		BED202CA2F758B0600B0C0A4 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = BED202B02F758B0500B0C0A4 /* NavigatorImpaired */;
-			targetProxy = BED202C92F758B0600B0C0A4 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		BED202D02F758B0600B0C0A4 /* Debug */ = {
@@ -425,7 +293,7 @@
 				CLIENT_TOKEN = "AR|4048186048737162|12ea3a58aabb21ee7692d1803ad8d698";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = YSN2XT3872;
+				DEVELOPMENT_TEAM = YC67GWUGZX;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -451,7 +319,7 @@
 				CLIENT_TOKEN = "AR|4048186048737162|12ea3a58aabb21ee7692d1803ad8d698";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = YSN2XT3872;
+				DEVELOPMENT_TEAM = YC67GWUGZX;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -468,78 +336,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Release;
-		};
-		BED202D62F758B0600B0C0A4 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = YSN2XT3872;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.felixfan.navigatorimpaired.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NavigatorImpaired.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NavigatorImpaired";
-			};
-			name = Debug;
-		};
-		BED202D72F758B0600B0C0A4 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = YSN2XT3872;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.felixfan.navigatorimpaired.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NavigatorImpaired.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NavigatorImpaired";
-			};
-			name = Release;
-		};
-		BED202D92F758B0600B0C0A4 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = YSN2XT3872;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.felixfan.navigatorimpaired.uitests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = NavigatorImpaired;
-			};
-			name = Debug;
-		};
-		BED202DA2F758B0600B0C0A4 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = YSN2XT3872;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.felixfan.navigatorimpaired.uitests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = NavigatorImpaired;
 			};
 			name = Release;
 		};
@@ -560,24 +356,6 @@
 			buildConfigurations = (
 				BED202D32F758B0600B0C0A4 /* Debug */,
 				BED202D42F758B0600B0C0A4 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		BED202D52F758B0600B0C0A4 /* Build configuration list for PBXNativeTarget "NavigatorImpairedTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				BED202D62F758B0600B0C0A4 /* Debug */,
-				BED202D72F758B0600B0C0A4 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		BED202D82F758B0600B0C0A4 /* Build configuration list for PBXNativeTarget "NavigatorImpairedUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				BED202D92F758B0600B0C0A4 /* Debug */,
-				BED202DA2F758B0600B0C0A4 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -38,9 +38,19 @@ class OpenClawBridge: ObservableObject {
       return
     }
     connectionState = .checking
-    guard let url = URL(string: "\(GeminiConfig.openClawHost):\(GeminiConfig.openClawPort)/v1/chat/completions") else {
-      connectionState = .unreachable("Invalid URL")
+    let base = "\(GeminiConfig.openClawHost):\(GeminiConfig.openClawPort)"
+
+    if await tryHealthCheck(baseURL: base) {
       return
+    }
+
+    await checkConnectionViaChatCompletions(baseURL: base)
+  }
+
+  /// Returns `true` if the gateway responded 2xx to `GET /health`.
+  private func tryHealthCheck(baseURL: String) async -> Bool {
+    guard let url = URL(string: "\(baseURL)/health") else {
+      return false
     }
     var request = URLRequest(url: url)
     request.httpMethod = "GET"
@@ -48,12 +58,54 @@ class OpenClawBridge: ObservableObject {
     request.setValue("glass", forHTTPHeaderField: "x-openclaw-message-channel")
     do {
       let (_, response) = try await pingSession.data(for: request)
-      if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
+      guard let http = response as? HTTPURLResponse else { return false }
+      if (200...299).contains(http.statusCode) {
         connectionState = .connected
-        NSLog("[OpenClaw] Gateway reachable (HTTP %d)", http.statusCode)
-      } else {
-        connectionState = .unreachable("Unexpected response")
+        NSLog("[OpenClaw] Gateway reachable via /health (HTTP %d)", http.statusCode)
+        return true
       }
+      NSLog("[OpenClaw] GET /health HTTP %d, falling back to POST chat completions", http.statusCode)
+    } catch {
+      NSLog("[OpenClaw] GET /health failed (%@), falling back to POST", error.localizedDescription)
+    }
+    return false
+  }
+
+  private func checkConnectionViaChatCompletions(baseURL: String) async {
+    guard let url = URL(string: "\(baseURL)/v1/chat/completions") else {
+      connectionState = .unreachable("Invalid URL")
+      return
+    }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("Bearer \(GeminiConfig.openClawGatewayToken)", forHTTPHeaderField: "Authorization")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue(sessionKey, forHTTPHeaderField: "x-openclaw-session-key")
+    request.setValue("glass", forHTTPHeaderField: "x-openclaw-message-channel")
+    let pingBody: [String: Any] = [
+      "model": "openclaw",
+      "messages": [["role": "user", "content": "__openclaw_connectivity_check__"]],
+      "stream": false,
+    ]
+    do {
+      request.httpBody = try JSONSerialization.data(withJSONObject: pingBody)
+      let (_, response) = try await pingSession.data(for: request)
+      guard let http = response as? HTTPURLResponse else {
+        connectionState = .unreachable("Unexpected response")
+        return
+      }
+      if (200...299).contains(http.statusCode) {
+        connectionState = .connected
+        NSLog("[OpenClaw] Gateway reachable via chat completions (HTTP %d)", http.statusCode)
+        return
+      }
+      if http.statusCode == 401 || http.statusCode == 403 {
+        connectionState = .unreachable(
+          "Unauthorized (HTTP \(http.statusCode)): check Gateway token matches gateway auth.token"
+        )
+        return
+      }
+      connectionState = .unreachable("Gateway returned HTTP \(http.statusCode)")
     } catch {
       connectionState = .unreachable(error.localizedDescription)
       NSLog("[OpenClaw] Gateway unreachable: %@", error.localizedDescription)
@@ -72,6 +124,13 @@ class OpenClawBridge: ObservableObject {
     toolName: String = "execute"
   ) async -> ToolResult {
     lastToolCallStatus = .executing(toolName)
+
+    guard GeminiConfig.isOpenClawConfigured else {
+      lastToolCallStatus = .failed(toolName, "OpenClaw not configured")
+      return .failure(
+        "OpenClaw is not set up. In the app’s Settings, fill in OpenClaw: Mac host (e.g. http://YourMac.local), port, hook token, and gateway token, and run the OpenClaw gateway on that Mac on the same Wi‑Fi. Until then, only conversation, navigation, and ping tools work."
+      )
+    }
 
     guard let url = URL(string: "\(GeminiConfig.openClawHost):\(GeminiConfig.openClawPort)/v1/chat/completions") else {
       lastToolCallStatus = .failed(toolName, "Invalid URL")
@@ -135,6 +194,61 @@ class OpenClawBridge: ObservableObject {
       NSLog("[OpenClaw] Agent error: %@", error.localizedDescription)
       lastToolCallStatus = .failed(toolName, error.localizedDescription)
       return .failure("Agent error: \(error.localizedDescription)")
+    }
+  }
+
+  // MARK: - Tools invoke (e.g. fall_alert WhatsApp skill)
+
+  /// `POST /tools/invoke` — see OpenClaw gateway docs (same host/port as chat completions).
+  /// - Returns: `(true, summary)` on success, `(false, reason)` on failure.
+  func invokeTool(name: String, args: [String: Any], sessionKey: String = "main") async -> (ok: Bool, detail: String) {
+    guard GeminiConfig.isOpenClawConfigured else {
+      return (false, "OpenClaw not configured")
+    }
+    guard let url = URL(string: "\(GeminiConfig.openClawHost):\(GeminiConfig.openClawPort)/tools/invoke") else {
+      return (false, "Invalid gateway URL")
+    }
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("Bearer \(GeminiConfig.openClawGatewayToken)", forHTTPHeaderField: "Authorization")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("glass", forHTTPHeaderField: "x-openclaw-message-channel")
+
+    let body: [String: Any] = [
+      "tool": name,
+      "args": args,
+      "sessionKey": sessionKey,
+    ]
+
+    do {
+      request.httpBody = try JSONSerialization.data(withJSONObject: body)
+      let (data, response) = try await session.data(for: request)
+      guard let http = response as? HTTPURLResponse else {
+        return (false, "No HTTP response")
+      }
+      guard (200...299).contains(http.statusCode) else {
+        let bodyStr = String(data: data, encoding: .utf8) ?? ""
+        NSLog("[OpenClaw] tools/invoke failed HTTP %d — %@", http.statusCode, String(bodyStr.prefix(300)))
+        return (false, "HTTP \(http.statusCode)")
+      }
+      guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return (true, String(data: data, encoding: .utf8) ?? "")
+      }
+      if let ok = json["ok"] as? Bool, ok {
+        if let result = json["result"] as? String {
+          return (true, result)
+        }
+        if let dict = json["result"] as? [String: Any], let text = dict["text"] as? String {
+          return (true, text)
+        }
+        return (true, "ok")
+      }
+      let errMsg = (json["error"] as? [String: Any])?["message"] as? String ?? String(data: data, encoding: .utf8) ?? "unknown"
+      return (false, errMsg)
+    } catch {
+      NSLog("[OpenClaw] tools/invoke error: %@", error.localizedDescription)
+      return (false, error.localizedDescription)
     }
   }
 }

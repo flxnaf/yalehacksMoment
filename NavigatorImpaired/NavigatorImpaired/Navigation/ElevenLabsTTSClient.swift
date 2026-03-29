@@ -29,6 +29,21 @@ final class ElevenLabsTTSClient: @unchecked Sendable {
         "Corridor to your left and right"
     ]
 
+    /// Fall / SOS lines spoken via `AudioOrchestrator` at `.hazard` — prewarm to reduce countdown latency.
+    static let fallHazardPhrases = [
+        "Fall detected. Alerting your guardian in 10 seconds. Double-tap to cancel.",
+        "5 seconds. Double-tap to cancel.",
+        "3 seconds. Double-tap to cancel.",
+        "Alert cancelled.",
+        "No guardian configured.",
+        "Guardian alerted. Help is on the way.",
+        "Guardian alerted by email and text.",
+        "Guardian emailed. Send the text message if Messages opened with a draft.",
+        "Alert failed to send. Please call for help manually.",
+        "Email could not be sent. Text to your guardian was sent or opened in Messages.",
+        "You've arrived.",
+    ]
+
     // MARK: - Pre-warm
 
     /// Call once on app launch to pre-generate all known cues.
@@ -39,6 +54,11 @@ final class ElevenLabsTTSClient: @unchecked Sendable {
             return
         }
         for phrase in Self.navPhrases {
+            Task.detached(priority: .utility) { [weak self] in
+                _ = try? await self?.audioData(for: phrase)
+            }
+        }
+        for phrase in Self.fallHazardPhrases {
             Task.detached(priority: .utility) { [weak self] in
                 _ = try? await self?.audioData(for: phrase)
             }

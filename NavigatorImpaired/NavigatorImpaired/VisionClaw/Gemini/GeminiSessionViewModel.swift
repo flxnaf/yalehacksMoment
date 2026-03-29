@@ -28,7 +28,8 @@ class GeminiSessionViewModel: ObservableObject {
     guard !isGeminiActive else { return }
 
     guard GeminiConfig.isConfigured else {
-      errorMessage = "Gemini API key not configured. Open GeminiConfig.swift and replace YOUR_GEMINI_API_KEY with your key from https://aistudio.google.com/apikey"
+      errorMessage =
+        "Gemini API key not configured. Open Settings → Gemini API and paste your key from https://aistudio.google.com/apikey (or set it in Secrets.swift as a default)."
       return
     }
 
@@ -182,6 +183,7 @@ class GeminiSessionViewModel: ObservableObject {
   }
 
   func stopSession() {
+    LastGeminiVideoFrame.clear()
     navigationController?.stopNavigation()
     eventClient.disconnect()
     toolCallRouter?.cancelAll()
@@ -204,6 +206,7 @@ class GeminiSessionViewModel: ObservableObject {
     let now = Date()
     guard now.timeIntervalSince(lastVideoFrameTime) >= GeminiConfig.videoFrameInterval else { return }
     lastVideoFrameTime = now
+    LastGeminiVideoFrame.lastImageSentToGemini = image
     geminiService.sendVideoFrame(image: image)
   }
 

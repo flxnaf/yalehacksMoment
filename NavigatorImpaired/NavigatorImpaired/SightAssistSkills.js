@@ -1,5 +1,8 @@
 // SightAssist OpenClaw skills — load this script in the WKWebView host alongside other skills.
 // Expects `registerSkill` and `SightAssistBridge.call` to exist in the agent runtime.
+//
+// For native fall → WhatsApp via gateway `POST /tools/invoke` (tool: fall_alert), deploy
+// `skills/fall_alert.js` from the repo root into your OpenClaw gateway skills bundle.
 
 registerSkill({
   name: "triggerSOS",

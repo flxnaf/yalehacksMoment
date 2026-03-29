@@ -2,6 +2,15 @@ import Foundation
 
 @MainActor
 class ToolCallRouter {
+  private enum InvokeArgsError: LocalizedError {
+    case invalid(String)
+    var errorDescription: String? {
+      switch self {
+      case .invalid(let s): return s
+      }
+    }
+  }
+
   private let bridge: OpenClawBridge
   private weak var navigationController: NavigationController?
   private weak var audioEngine: SpatialAudioEngine?
@@ -59,6 +68,23 @@ class ToolCallRouter {
         } else {
           result = .failure("Spatial audio engine is not available.")
         }
+      } else if callName == "invoke_openclaw_tool" {
+        let toolNm = (call.args["tool_name"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if toolNm.isEmpty {
+          result = .failure("Missing tool_name for invoke_openclaw_tool.")
+        } else {
+          switch Self.parseOpenClawInvokeArgs(call.args["tool_args"]) {
+          case .failure(let err):
+            result = .failure(err.localizedDescription)
+          case .success(let invokeArgs):
+            let rawSession = (call.args["session_key"] as? String ?? "main").trimmingCharacters(in: .whitespacesAndNewlines)
+            let sessionKey = rawSession.isEmpty ? "main" : rawSession
+            self.bridge.lastToolCallStatus = .executing(callName)
+            let r = await self.bridge.invokeTool(name: toolNm, args: invokeArgs, sessionKey: sessionKey)
+            self.bridge.lastToolCallStatus = r.ok ? .completed(callName) : .failed(callName, r.detail)
+            result = r.ok ? .success(r.detail) : .failure(r.detail)
+          }
+        }
       } else {
         let taskDesc = call.args["task"] as? String ?? String(describing: call.args)
         result = await bridge.delegateTask(task: taskDesc, toolName: callName)
@@ -103,6 +129,22 @@ class ToolCallRouter {
   }
 
   // MARK: - Private
+
+  /// Accepts omitted args, `{}`, a JSON object string, or a dictionary from the Live API.
+  private static func parseOpenClawInvokeArgs(_ value: Any?) -> Result<[String: Any], InvokeArgsError> {
+    guard let value else { return .success([:]) }
+    if let dict = value as? [String: Any] { return .success(dict) }
+    if let s = value as? String {
+      let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+      if t.isEmpty || t == "{}" { return .success([:]) }
+      guard let data = t.data(using: .utf8),
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return .failure(.invalid("tool_args must be valid JSON object text, e.g. {\"to\":\"+15551234567\"}."))
+      }
+      return .success(obj)
+    }
+    return .failure(.invalid("tool_args must be a JSON object string or object."))
+  }
 
   private func buildToolResponse(
     callId: String,

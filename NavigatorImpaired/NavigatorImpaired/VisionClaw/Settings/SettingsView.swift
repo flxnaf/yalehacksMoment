@@ -17,13 +17,13 @@ struct SettingsView: View {
   @State private var showResetConfirmation = false
 
   @State private var guardianName: String = ""
+  @State private var guardianEmail: String = ""
   @State private var guardianPhone: String = ""
-  @State private var twilioSid: String = ""
-  @State private var twilioToken: String = ""
-  @State private var twilioFrom: String = ""
+  @State private var guardianWhatsApp: String = ""
+  @State private var sendGridRelayBaseURL: String = ""
+  @State private var sendGridRelaySecret: String = ""
   @State private var gx10BaseURL: String = ""
   @State private var gx10Model: String = ""
-  @State private var imgbbApiKey: String = ""
   @State private var showGuardianValidationAlert = false
   @State private var guardianValidationMessage = ""
 
@@ -48,7 +48,12 @@ struct SettingsView: View {
             .frame(minHeight: 200)
         }
 
-        Section(header: Text("OpenClaw"), footer: Text("Connect to an OpenClaw gateway running on your Mac for agentic tool-calling.")) {
+        Section(
+          header: Text("OpenClaw"),
+          footer: Text(
+            "Agentic tools need a reachable gateway (same Wi‑Fi or a tunnel). Use your Mac’s Wi‑Fi IP or .local hostname — addresses like 172.17.x.x are often Docker-only and won’t work from the phone. Gateway token must match the gateway’s auth.token exactly (Authorization: Bearer). The app checks GET /health first, then POST /v1/chat/completions; only HTTP 2xx counts as connected."
+          )
+        ) {
           VStack(alignment: .leading, spacing: 4) {
             Text("Host")
               .font(.caption)
@@ -118,11 +123,11 @@ struct SettingsView: View {
         Section(
           header: Text("Guardian / Fall alert"),
           footer: Text(
-            "Used when SightAssist detects a fall or you trigger SOS. Contact phone should be E.164 (e.g. +15551234567). Twilio sends SMS; OpenClaw bridge can also notify if configured. GX10 and imgbb are optional for scene description and image links in alerts."
+            "After the SOS countdown: email via sgQuickstart relay (http:// + Mac LAN IP), SMS to Guardian phone if set, and WhatsApp via OpenClaw tool fall_alert if WhatsApp number is set and OpenClaw is configured. Load skills/fall_alert.js on your gateway. SMS opens Messages (you may need to tap Send). Relay secret optional if .env has RELAY_SECRET. GX10 optional for scene text."
           )
         ) {
           VStack(alignment: .leading, spacing: 4) {
-            Text("Guardian name")
+            Text("Your name (optional, for alert text)")
               .font(.caption)
               .foregroundColor(.secondary)
             TextField("Jane Doe", text: $guardianName)
@@ -130,50 +135,68 @@ struct SettingsView: View {
           }
 
           VStack(alignment: .leading, spacing: 4) {
-            Text("Contact phone (E.164)")
+            Text("Guardian email")
+              .font(.caption)
+              .foregroundColor(.secondary)
+            TextField("parent@example.com", text: $guardianEmail)
+              .keyboardType(.emailAddress)
+              .autocapitalization(.none)
+              .disableAutocorrection(true)
+              .font(.system(.body, design: .monospaced))
+          }
+
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Guardian phone (optional, for SMS)")
               .font(.caption)
               .foregroundColor(.secondary)
             TextField("+15551234567", text: $guardianPhone)
-              .autocapitalization(.none)
-              .disableAutocorrection(true)
               .keyboardType(.phonePad)
-              .font(.system(.body, design: .monospaced))
-          }
-
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Twilio Account SID")
-              .font(.caption)
-              .foregroundColor(.secondary)
-            TextField("AC…", text: $twilioSid)
               .autocapitalization(.none)
               .disableAutocorrection(true)
               .font(.system(.body, design: .monospaced))
           }
 
           VStack(alignment: .leading, spacing: 4) {
-            Text("Twilio Auth Token")
+            Text("Guardian WhatsApp (optional, E.164)")
               .font(.caption)
               .foregroundColor(.secondary)
-            SecureField("Auth token", text: $twilioToken)
-              .autocapitalization(.none)
-              .disableAutocorrection(true)
-              .font(.system(.body, design: .monospaced))
-          }
-
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Twilio From (your Twilio number)")
-              .font(.caption)
+            Text("Uses OpenClaw POST /tools/invoke with tool fall_alert after countdown. Same gateway token as Settings → OpenClaw.")
+              .font(.caption2)
               .foregroundColor(.secondary)
-            TextField("+15559876543", text: $twilioFrom)
-              .autocapitalization(.none)
-              .disableAutocorrection(true)
+            TextField("+15551234567", text: $guardianWhatsApp)
               .keyboardType(.phonePad)
+              .autocapitalization(.none)
+              .disableAutocorrection(true)
+              .font(.system(.body, design: .monospaced))
+          }
+
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Fall alert email relay URL")
+              .font(.caption)
+              .foregroundColor(.secondary)
+            TextField("http://192.168.1.5:8787", text: $sendGridRelayBaseURL)
+              .autocapitalization(.none)
+              .disableAutocorrection(true)
+              .keyboardType(.URL)
+              .font(.system(.body, design: .monospaced))
+          }
+
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Relay shared secret (optional)")
+              .font(.caption)
+              .foregroundColor(.secondary)
+            SecureField("RELAY_SECRET", text: $sendGridRelaySecret)
+              .autocapitalization(.none)
+              .disableAutocorrection(true)
               .font(.system(.body, design: .monospaced))
           }
 
           VStack(alignment: .leading, spacing: 4) {
             Text("GX10 base URL (optional)")
               .font(.caption)
+              .foregroundColor(.secondary)
+            Text("On device, use your Mac’s LAN IP if GX10 runs on the Mac — not 127.0.0.1.")
+              .font(.caption2)
               .foregroundColor(.secondary)
             TextField("http://127.0.0.1:8000", text: $gx10BaseURL)
               .autocapitalization(.none)
@@ -187,16 +210,6 @@ struct SettingsView: View {
               .font(.caption)
               .foregroundColor(.secondary)
             TextField("Qwen/Qwen2.5-VL-7B-Instruct", text: $gx10Model)
-              .autocapitalization(.none)
-              .disableAutocorrection(true)
-              .font(.system(.body, design: .monospaced))
-          }
-
-          VStack(alignment: .leading, spacing: 4) {
-            Text("imgbb API key (optional)")
-              .font(.caption)
-              .foregroundColor(.secondary)
-            SecureField("imgbb key", text: $imgbbApiKey)
               .autocapitalization(.none)
               .disableAutocorrection(true)
               .font(.system(.body, design: .monospaced))
@@ -238,7 +251,9 @@ struct SettingsView: View {
           GuardianAlertManager.shared.clearGuardianConfig()
           UserDefaults.standard.removeObject(forKey: GuardianAlertManager.gx10BaseURLKey)
           UserDefaults.standard.removeObject(forKey: GuardianAlertManager.gx10ModelKey)
-          UserDefaults.standard.removeObject(forKey: GuardianAlertManager.imgbbKeyDefaults)
+          UserDefaults.standard.removeObject(forKey: "imgbbApiKey")
+          UserDefaults.standard.removeObject(forKey: GuardianAlertManager.sendGridRelayBaseURLKey)
+          UserDefaults.standard.removeObject(forKey: GuardianAlertManager.sendGridRelaySecretKey)
           loadCurrentValues()
         }
         Button("Cancel", role: .cancel) {}
@@ -265,49 +280,45 @@ struct SettingsView: View {
 
     if let g = GuardianAlertManager.shared.loadConfig() {
       guardianName = g.name
-      guardianPhone = g.phoneNumber
-      twilioSid = g.twilioAccountSid
-      twilioToken = g.twilioAuthToken
-      twilioFrom = g.twilioFromNumber
+      guardianEmail = g.guardianEmail
+      guardianPhone = g.guardianPhone
+      guardianWhatsApp = g.guardianWhatsApp
     } else {
       guardianName = ""
+      guardianEmail = ""
       guardianPhone = ""
-      twilioSid = ""
-      twilioToken = ""
-      twilioFrom = ""
+      guardianWhatsApp = ""
     }
     gx10BaseURL = UserDefaults.standard.string(forKey: GuardianAlertManager.gx10BaseURLKey) ?? ""
     gx10Model = UserDefaults.standard.string(forKey: GuardianAlertManager.gx10ModelKey) ?? ""
-    imgbbApiKey = UserDefaults.standard.string(forKey: GuardianAlertManager.imgbbKeyDefaults) ?? ""
+    sendGridRelayBaseURL = UserDefaults.standard.string(forKey: GuardianAlertManager.sendGridRelayBaseURLKey) ?? ""
+    sendGridRelaySecret = UserDefaults.standard.string(forKey: GuardianAlertManager.sendGridRelaySecretKey) ?? ""
   }
 
   /// Returns `false` if guardian fields fail validation (alert is shown); caller should not dismiss.
   private func saveAll() -> Bool {
     let name = guardianName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let email = guardianEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+    let relay = sendGridRelayBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
     let phone = guardianPhone.trimmingCharacters(in: .whitespacesAndNewlines)
-    let sid = twilioSid.trimmingCharacters(in: .whitespacesAndNewlines)
-    let token = twilioToken.trimmingCharacters(in: .whitespacesAndNewlines)
-    let from = twilioFrom.trimmingCharacters(in: .whitespacesAndNewlines)
+    let whatsApp = guardianWhatsApp.trimmingCharacters(in: .whitespacesAndNewlines)
 
-    let allEmpty = name.isEmpty && phone.isEmpty && sid.isEmpty && token.isEmpty && from.isEmpty
-    let twilioAny = !sid.isEmpty || !token.isEmpty || !from.isEmpty
-    if twilioAny {
-      let twilioComplete = !sid.isEmpty && !token.isEmpty && !from.isEmpty
-      if !twilioComplete {
+    // Secret is optional: do not include it here — a leftover saved secret must not block saving
+    // “email + relay + blank secret” or force users to clear a stale SecureField to satisfy “all empty”.
+    let guardianFallCoreEmpty = name.isEmpty && email.isEmpty && relay.isEmpty && phone.isEmpty && whatsApp.isEmpty
+    if !guardianFallCoreEmpty {
+      let hasEmailChannel = !email.isEmpty && !relay.isEmpty
+      let partialEmail = !email.isEmpty || !relay.isEmpty
+      if partialEmail && !hasEmailChannel {
         guardianValidationMessage =
-          "Twilio Account SID, Auth Token, and From number must all be filled to send SMS, or clear all three."
+          "Enter both guardian email and fall alert relay URL (http://…), or clear email and relay to use only SMS or WhatsApp. Relay shared secret is optional if sgQuickstart/.env sets RELAY_SECRET."
         showGuardianValidationAlert = true
         return false
       }
-      if name.isEmpty || phone.isEmpty {
-        guardianValidationMessage = "Enter guardian name and contact phone (E.164) when using Twilio."
-        showGuardianValidationAlert = true
-        return false
-      }
-    } else if !allEmpty {
-      if name.isEmpty || phone.isEmpty {
+      let hasAnyChannel = hasEmailChannel || !phone.isEmpty || !whatsApp.isEmpty
+      if !hasAnyChannel {
         guardianValidationMessage =
-          "Enter guardian name and contact phone (E.164), or clear all guardian fields to remove saved contact."
+          "Add guardian email and relay URL, a guardian phone for SMS, or a WhatsApp number for OpenClaw fall_alert."
         showGuardianValidationAlert = true
         return false
       }
@@ -326,22 +337,23 @@ struct SettingsView: View {
     settings.videoStreamingEnabled = videoStreamingEnabled
     settings.proactiveNotificationsEnabled = proactiveNotificationsEnabled
 
-    if allEmpty {
+    if guardianFallCoreEmpty {
       GuardianAlertManager.shared.clearGuardianConfig()
+      UserDefaults.standard.removeObject(forKey: GuardianAlertManager.sendGridRelayBaseURLKey)
+      UserDefaults.standard.removeObject(forKey: GuardianAlertManager.sendGridRelaySecretKey)
+      sendGridRelayBaseURL = ""
+      sendGridRelaySecret = ""
+      guardianPhone = ""
+      guardianWhatsApp = ""
     } else {
-      let cfg = GuardianConfig(
-        name: name,
-        phoneNumber: phone,
-        twilioAccountSid: sid,
-        twilioAuthToken: token,
-        twilioFromNumber: from
-      )
+      let cfg = GuardianConfig(name: name, guardianEmail: email, guardianPhone: phone, guardianWhatsApp: whatsApp)
       GuardianAlertManager.shared.saveConfig(cfg)
     }
 
     persistOptionalDefaults(gx10BaseURL, GuardianAlertManager.gx10BaseURLKey)
     persistOptionalDefaults(gx10Model, GuardianAlertManager.gx10ModelKey)
-    persistOptionalDefaults(imgbbApiKey, GuardianAlertManager.imgbbKeyDefaults)
+    persistOptionalDefaults(sendGridRelayBaseURL, GuardianAlertManager.sendGridRelayBaseURLKey)
+    persistOptionalDefaults(sendGridRelaySecret, GuardianAlertManager.sendGridRelaySecretKey)
 
     return true
   }
