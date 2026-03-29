@@ -17,6 +17,8 @@ final class SettingsManager {
     case speakerOutputEnabled
     case videoStreamingEnabled
     case proactiveNotificationsEnabled
+    case navigationHazardScanEnabled
+    case navigationHazardScanIntervalSeconds
   }
 
   private init() {}
@@ -102,13 +104,31 @@ final class SettingsManager {
     set { defaults.set(newValue, forKey: Key.proactiveNotificationsEnabled.rawValue) }
   }
 
+  // MARK: - Navigation hazard scan (Gemini REST)
+
+  var navigationHazardScanEnabled: Bool {
+    get { defaults.object(forKey: Key.navigationHazardScanEnabled.rawValue) as? Bool ?? true }
+    set { defaults.set(newValue, forKey: Key.navigationHazardScanEnabled.rawValue) }
+  }
+
+  /// Seconds between periodic hazard scans while `NavigationController.isNavigating` is true.
+  var navigationHazardScanIntervalSeconds: TimeInterval {
+    get {
+      let v = defaults.double(forKey: Key.navigationHazardScanIntervalSeconds.rawValue)
+      if v > 0 { return min(max(v, 2), 5) }
+      return 3
+    }
+    set { defaults.set(min(max(newValue, 2), 5), forKey: Key.navigationHazardScanIntervalSeconds.rawValue) }
+  }
+
   // MARK: - Reset
 
   func resetAll() {
     for key in [Key.geminiAPIKey, .geminiSystemPrompt, .openClawHost, .openClawPort,
                 .openClawHookToken, .openClawGatewayToken, .webrtcSignalingURL, .k2APIKey,
                 .speakerOutputEnabled, .videoStreamingEnabled,
-                .proactiveNotificationsEnabled] {
+                .proactiveNotificationsEnabled, .navigationHazardScanEnabled,
+                .navigationHazardScanIntervalSeconds] {
       defaults.removeObject(forKey: key.rawValue)
     }
   }

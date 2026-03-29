@@ -347,6 +347,9 @@ final class SpatialAudioEngine: ObservableObject {
     /// Threshold distance to auto-clear the beacon (meters).
     private var arrivalThresholdMeters: Float = 3.0
 
+    /// Extra multiplier for shrine ping (navigation ducking near waypoints). Applied with policy duck.
+    private var beaconVolumeScale: Float = 1.0
+
     /// Smoothed GPS-derived bearing to beacon (prevents jitter from GPS noise).
     private var smoothedGPSBearing: Float = 0
 
@@ -392,6 +395,15 @@ final class SpatialAudioEngine: ObservableObject {
         fusedHeadingDegrees * Float.pi / 180
     }
 
+    func setNavigationPingInterval(_ seconds: Float) {
+        let clamped = max(0.4, min(5.0, seconds))
+        shrinePing.pingInterval = clamped
+    }
+
+    func setBeaconVolumeScale(_ scale: Float) {
+        beaconVolumeScale = max(0, min(1, scale))
+    }
+
     /// Place the shrine ping at a bearing relative to where the user is
     /// currently facing. 0 = ahead, -90 = left, +90 = right.
     /// `distanceMeters` sets how far away the beacon is (default 10m).
@@ -420,6 +432,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
 
         beaconActive = true
+        beaconVolumeScale = 1
         shrinePing.targetVolume = 0.70
         updateShrineNodePosition()
     }
@@ -427,6 +440,7 @@ final class SpatialAudioEngine: ObservableObject {
     func clearBeacon() {
         beaconActive = false
         beaconCoordinate = nil
+        beaconVolumeScale = 1
         shrinePing.targetVolume = 0
         shoreAmbient.wantsPlay = false
         isOnTarget = false
@@ -497,7 +511,7 @@ final class SpatialAudioEngine: ObservableObject {
         detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
 
         if beaconActive {
-            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.70
+            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.70 * beaconVolumeScale
         }
 
         updateCount += 1
@@ -717,6 +731,8 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     private func stopEngine() {
+        beaconVolumeScale = 1
+        shrinePing.pingInterval = 2.0
         shrinePing.targetVolume = 0
         shoreAmbient.wantsPlay = false
         isOnTarget = false

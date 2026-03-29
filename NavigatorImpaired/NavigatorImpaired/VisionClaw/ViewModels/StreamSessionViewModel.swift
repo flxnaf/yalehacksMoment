@@ -256,10 +256,16 @@ class StreamSessionViewModel: ObservableObject {
             policyOutput: policyOut
           )
 
-          // Update shrine ping bearing from GPS navigation guidance
-          if let guidance = self.navigationController?.currentGuidance,
-             self.navigationController?.isNavigating == true {
-            self.audioEngine.setBeaconBearing(Float(guidance.beaconAzimuth))
+          // Shrine ping: Sheikah interval, zone snap, distance to target, nav duck scale
+          if let nav = self.navigationController,
+             nav.isNavigating,
+             let guidance = nav.currentGuidance {
+            let dist = Float(guidance.distanceToWaypoint)
+            self.audioEngine.setNavigationPingInterval(SheikahPinger.sheikahInterval(distanceMeters: dist))
+            self.audioEngine.setBeaconVolumeScale(nav.navigationPingVolumeScale)
+            let azimuth = SheikahPinger.snapToZone(relativeBearingDegrees: Float(guidance.relativeBearing))
+            let dm = max(5, min(120, dist))
+            self.audioEngine.setBeaconBearing(azimuth, distanceMeters: dm)
           }
 
           self.verbalCueController.process(
@@ -268,6 +274,7 @@ class StreamSessionViewModel: ObservableObject {
             doorDetected: self.audioEngine.visionDetector.doorDetected,
             corridorDetected: self.audioEngine.visionDetector.corridorDetected,
             geminiSpeaking: geminiSpeaking,
+            isNavigating: self.navigationController?.isNavigating ?? false,
             depthProfile: self.audioEngine.depthProfile,
             heading: self.audioEngine.currentHeading
           )

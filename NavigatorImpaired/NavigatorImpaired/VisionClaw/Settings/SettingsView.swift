@@ -14,6 +14,8 @@ struct SettingsView: View {
   @State private var speakerOutputEnabled: Bool = false
   @State private var videoStreamingEnabled: Bool = true
   @State private var proactiveNotificationsEnabled: Bool = true
+  @State private var navigationHazardScanEnabled: Bool = true
+  @State private var navigationHazardScanInterval: Double = 4
   @State private var showResetConfirmation = false
 
   @State private var guardianName: String = ""
@@ -109,6 +111,19 @@ struct SettingsView: View {
 
         Section(header: Text("Video"), footer: Text("Disable video streaming to save battery. Audio remains active for voice-only interaction.")) {
           Toggle("Video Streaming", isOn: $videoStreamingEnabled)
+        }
+
+        Section(
+          header: Text("Walking navigation"),
+          footer: Text(
+            "While GPS walking navigation is on, sends a camera frame to Gemini (REST) on a timer. Positions include ahead/center as well as left and right. Uses your Gemini API key."
+          )
+        ) {
+          Toggle("Hazard vision scan", isOn: $navigationHazardScanEnabled)
+          Stepper(value: $navigationHazardScanInterval, in: 2...5, step: 1) {
+            Text("Scan every \(Int(navigationHazardScanInterval)) seconds")
+          }
+          .disabled(!navigationHazardScanEnabled)
         }
 
         Section(header: Text("Notifications"), footer: Text("Receive proactive updates from OpenClaw (heartbeat, scheduled tasks) spoken through the glasses.")) {
@@ -262,6 +277,8 @@ struct SettingsView: View {
     speakerOutputEnabled = settings.speakerOutputEnabled
     videoStreamingEnabled = settings.videoStreamingEnabled
     proactiveNotificationsEnabled = settings.proactiveNotificationsEnabled
+    navigationHazardScanEnabled = settings.navigationHazardScanEnabled
+    navigationHazardScanInterval = settings.navigationHazardScanIntervalSeconds
 
     if let g = GuardianAlertManager.shared.loadConfig() {
       guardianName = g.name
@@ -325,6 +342,8 @@ struct SettingsView: View {
     settings.speakerOutputEnabled = speakerOutputEnabled
     settings.videoStreamingEnabled = videoStreamingEnabled
     settings.proactiveNotificationsEnabled = proactiveNotificationsEnabled
+    settings.navigationHazardScanEnabled = navigationHazardScanEnabled
+    settings.navigationHazardScanIntervalSeconds = navigationHazardScanInterval
 
     if allEmpty {
       GuardianAlertManager.shared.clearGuardianConfig()

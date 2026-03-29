@@ -36,7 +36,7 @@ class ToolCallRouter {
         } else if let nav = navigationController {
           do {
             try await nav.startNavigation(to: destination)
-            result = .success("Navigation started to \(destination).")
+            result = .success("OK")
           } catch {
             result = .failure(error.localizedDescription)
           }
