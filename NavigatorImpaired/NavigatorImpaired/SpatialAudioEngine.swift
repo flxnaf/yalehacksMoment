@@ -4,12 +4,66 @@ import CoreMotion
 import simd
 import UIKit
 
+// MARK: - Agent debug NDJSON (session 3d0606)
+
+fileprivate func agentSpatialDebugLog(
+  hypothesisId: String,
+  location: String,
+  message: String,
+  data: [String: Any]
+) {
+  // #region agent log
+  let payload: [String: Any] = [
+    "sessionId": "3d0606",
+    "hypothesisId": hypothesisId,
+    "location": location,
+    "message": message,
+    "data": data,
+    "timestamp": Int(Date().timeIntervalSince1970 * 1000),
+  ]
+  guard JSONSerialization.isValidJSONObject(payload),
+        let jsonData = try? JSONSerialization.data(withJSONObject: payload),
+        let line = String(data: jsonData, encoding: .utf8)
+  else { return }
+
+  // Ingest server (Mac) may mirror to workspace log when reachable (Simulator / same host).
+  if let ingest = URL(string: "http://127.0.0.1:7413/ingest/e985fdd7-f511-4f3d-801f-5ddb2436ce45") {
+    var req = URLRequest(url: ingest)
+    req.httpMethod = "POST"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    req.setValue("3d0606", forHTTPHeaderField: "X-Debug-Session-Id")
+    req.httpBody = jsonData
+    URLSession.shared.dataTask(with: req) { _, _, _ in }.resume()
+  }
+
+  // Primary durable log (always writable): copy this file to repo `.cursor/debug-3d0606.log` for analysis.
+  if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+    let p = docs.appendingPathComponent("debug-3d0606.log")
+    if !FileManager.default.fileExists(atPath: p.path) {
+      FileManager.default.createFile(atPath: p.path, contents: nil)
+    }
+    if let handle = try? FileHandle(forWritingTo: p) {
+      defer { try? handle.close() }
+      try? handle.seekToEnd()
+      handle.write((line + "\n").data(using: .utf8)!)
+    }
+  }
+  NSLog("AGENT_DEBUG_JSON:%@", line)
+  // #endregion
+}
+
 // MARK: - Sheikah Sensor Voice (BOTW shrine detector)
 
 final class ShrinePingVoice {
 
     var targetVolume: Float = 0
-    var pingInterval: Float = 2.0
+    var pingInterval: Float = 2.0 {
+        didSet {
+            if pingInterval < oldValue {
+                samplesSinceCycle = min(samplesSinceCycle, max(0, Int(pingInterval * sr) - 1))
+            }
+        }
+    }
 
     private let sr: Float
     private var currentVolume: Float = 0
@@ -45,7 +99,8 @@ final class ShrinePingVoice {
             currentVolume += (tv - currentVolume) * slewRate
 
             samplesSinceCycle += 1
-            if pingState == .idle && samplesSinceCycle >= Int(pingInterval * sr) && currentVolume > 0.001 {
+            // Gate new cycles on *target* volume so cadence does not stall while `currentVolume` slews up from zero.
+            if pingState == .idle && samplesSinceCycle >= Int(pingInterval * sr) && tv > 0.001 {
                 pingState = .ping1
                 samplesInState = 0
                 samplesSinceCycle = 0
@@ -272,8 +327,22 @@ final class SpatialAudioEngine: ObservableObject {
     private var lockedGPSBearing: Float = 0
     private var isGPSBearingLocked: Bool = false
 
+    /// When true, navigation must not overwrite the beacon (`set_ping` / `find_object`).
+    private var beaconControlledByUserTools = false
+
+    /// When true, skip auto-clear on arrival (approximate world positions from room scan).
+    private var suppressArrivalAutoClear = false
+
     /// Extra multiplier for shrine ping (navigation ducking near waypoints). Applied with policy duck.
     private var beaconVolumeScale: Float = 1.0
+
+    /// Latest navigation audio policy duck (1 = no duck). Updated from `applyPerceptionFrame` only; AR path multiplies ping volume by this.
+    private var lastDuckNonSpeech: Float = 1.0
+
+    /// Hysteresis for on-target shore zone (reduces ping ↔ shore flutter at the boundary).
+    private var onTargetZoneLatched: Bool = false
+    private let onTargetEnterDegrees: Float = 20
+    private let onTargetExitDegrees: Float = 28
 
     /// Smoothed GPS-derived bearing to beacon (prevents jitter from GPS noise).
     private var smoothedGPSBearing: Float = 0
@@ -295,6 +364,9 @@ final class SpatialAudioEngine: ObservableObject {
     private var updateCount = 0
     private var lastRestartAttempt: Date = .distantPast
     private let restartCooldown: TimeInterval = 3.0
+
+    /// One-shot: log when AR updates run but no beacon (H3).
+    private var agentLoggedNoBeaconYet = false
 
     // MARK: - Init
 
@@ -347,6 +419,7 @@ final class SpatialAudioEngine: ObservableObject {
     func setBeaconBearing(_ degrees: Float, distanceMeters: Float = 10) {
         if !isEnabled { isEnabled = true }
 
+        beaconIsIndoorObject = false
         beaconBearingDegrees = degrees
         beaconInitialDistance = distanceMeters
         beaconDistanceMeters = distanceMeters
@@ -389,7 +462,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
 
         beaconActive = true
-        beaconVolumeScale = 1
+        // Do not reset `beaconVolumeScale` here — `StreamSessionViewModel` / `setBeaconVolumeScale` may have set nav ducking.
         shrinePing.targetVolume = 0.70
         updateShrineNodePosition()
     }
@@ -424,6 +497,8 @@ final class SpatialAudioEngine: ObservableObject {
         beaconBearingDegrees = 0
         beaconDistanceMeters = 0
         beaconInitialDistance = 0
+        obstacleFlashUntil = nil
+        obstacleFlashBearingDeg = nil
         print("[SpatialAudio] Beacon cleared")
     }
 
@@ -486,9 +561,8 @@ final class SpatialAudioEngine: ObservableObject {
         detectedPersons = visionDetector.latestPersons
         detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
 
-        if beaconActive {
-            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.70 * beaconVolumeScale
-        }
+        // Single source of policy duck; AR path applies `rawPing * lastDuckNonSpeech * beaconVolumeScale`.
+        lastDuckNonSpeech = policyOutput.duckNonSpeech
 
         updateCount += 1
     }
@@ -527,6 +601,19 @@ final class SpatialAudioEngine: ObservableObject {
             shoreAudio.wantsPlay = false
             shoreAudio.update()
             isOnTarget = false
+            // #region agent log
+            if !agentLoggedNoBeaconYet {
+                agentLoggedNoBeaconYet = true
+                agentSpatialDebugLog(
+                  hypothesisId: "H3",
+                  location: "SpatialAudioEngine.updateShrineNodePosition",
+                  message: "beacon_inactive_skip_spatial",
+                  data: [
+                    "beaconActive": false,
+                    "avEngineRunning": avEngine.isRunning,
+                  ])
+            }
+            // #endregion
             return
         }
 
@@ -610,6 +697,14 @@ final class SpatialAudioEngine: ObservableObject {
                 clearBeacon()
                 AudioOrchestrator.shared.enqueue("You've arrived.", priority: .hazard)
                 return
+            } else if beaconIsIndoorObject && beaconDistanceMeters < indoorFoundItProximityMeters {
+                clearBeacon()
+                AudioOrchestrator.shared.enqueue("Found it.", priority: .hazard)
+                return
+            } else if beaconIsIndoorObject && Date().timeIntervalSince(beaconSetTime) > 30.0 {
+                clearBeacon()
+                AudioOrchestrator.shared.enqueue("Found it.", priority: .hazard)
+                return
             }
         }
 
@@ -617,7 +712,9 @@ final class SpatialAudioEngine: ObservableObject {
         let rad = relativeBeaconAngle * Float.pi / 180
         let audioDist: Float = 4.0
         shrineNode?.position = AVAudio3DPoint(
-            x: sinf(rad) * audioDist, y: 0, z: -cosf(rad) * audioDist
+            x: sinf(rad) * audioScale,
+            y: yElev,
+            z: -cosf(rad) * audioScale
         )
 
         let inZone = abs(relativeBeaconAngle) < 20
@@ -631,6 +728,23 @@ final class SpatialAudioEngine: ObservableObject {
             let mode = usedARKit ? "ARKit" : (beaconCoordinate != nil ? "GPS" : "compass")
             print("[ShrinePos] [\(mode)] rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m wp=\(waypointWorldPosition != nil) engine=\(avEngine.isRunning)")
         }
+
+        if let until = obstacleFlashUntil, now >= until {
+            obstacleFlashUntil = nil
+            obstacleFlashBearingDeg = nil
+        }
+    }
+
+    private func updateDistanceMuffleEQ(clampedDistanceMeters: Float) {
+        guard let eq = shrineDistanceEQ, eq.bands.count > 0 else { return }
+        let band = eq.bands[0]
+        let targetCutoff: Float = clampedDistanceMeters > 3.0
+            ? max(800, 20_000 - (clampedDistanceMeters - 3.0) * 2_200)
+            : 20_000
+        if abs(targetCutoff - lastDistanceEQCutoffHz) < 40 { return }
+        lastDistanceEQCutoffHz = targetCutoff
+        band.frequency = min(20_000, max(400, targetCutoff))
+        band.bypass = targetCutoff >= 19_000
     }
 
     // MARK: - Audio graph
@@ -651,6 +765,19 @@ final class SpatialAudioEngine: ObservableObject {
         environment.distanceAttenuationParameters.maximumDistance = 20.0
         environment.distanceAttenuationParameters.rolloffFactor = 1.0
 
+        let reverbParams = environment.reverbParameters
+        reverbParams.enable = true
+        reverbParams.level = -22
+        reverbParams.loadFactoryReverbPreset(.smallRoom)
+
+        let eq = AVAudioUnitEQ(numberOfBands: 1)
+        eq.bands[0].filterType = .lowPass
+        eq.bands[0].frequency = 20_000
+        eq.bands[0].bandwidth = 1.0
+        eq.bands[0].bypass = true
+        avEngine.attach(eq)
+        shrineDistanceEQ = eq
+
         let voice = shrinePing
         let node = AVAudioSourceNode(format: mono) { [voice] _, _, frameCount, abl in
             let ptr = UnsafeMutableAudioBufferListPointer(abl)
@@ -665,6 +792,18 @@ final class SpatialAudioEngine: ObservableObject {
         else { node.renderingAlgorithm = .HRTF }
         node.position = AVAudio3DPoint(x: 0, y: 0, z: -4)
         shrineNode = node
+
+        // #region agent log
+        agentSpatialDebugLog(
+          hypothesisId: "H1",
+          location: "SpatialAudioEngine.buildAudioGraph",
+          message: "hrtf_graph_built",
+          data: [
+            "environmentHRTF": true,
+            "shrineNodeAttached": shrineNode != nil,
+            "sampleRate": sampleRate,
+          ])
+        // #endregion
 
         shoreAudio.attach(to: avEngine, environment: environment)
 
@@ -687,6 +826,16 @@ final class SpatialAudioEngine: ObservableObject {
             isEnabled = false
             return
         }
+        // #region agent log
+        agentSpatialDebugLog(
+          hypothesisId: "H2",
+          location: "SpatialAudioEngine.startEngine",
+          message: "avengine_running",
+          data: [
+            "isRunning": avEngine.isRunning,
+            "isEnabled": isEnabled,
+          ])
+        // #endregion
         LocationManager.shared.requestPermissionAndStart()
         fusedHeadingDegrees = Float(LocationManager.shared.currentHeading)
         startMotionTracking()
@@ -717,6 +866,12 @@ final class SpatialAudioEngine: ObservableObject {
 
     private func stopEngine() {
         beaconVolumeScale = 1
+        lastDuckNonSpeech = 1.0
+        onTargetZoneLatched = false
+        navigationPingCadenceFromStream = false
+        obstacleFlashUntil = nil
+        obstacleFlashBearingDeg = nil
+        lastDistanceEQCutoffHz = 20_000
         shrinePing.pingInterval = 2.0
         shrinePing.targetVolume = 0
         shoreAudio.stop()

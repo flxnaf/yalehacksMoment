@@ -119,7 +119,12 @@ struct SettingsView: View {
           }
         }
 
-        Section(header: Text("Audio"), footer: Text("Route audio output to the iPhone speaker instead of glasses. Useful for demos where others need to hear.")) {
+        Section(
+          header: Text("Audio"),
+          footer: Text(
+            "Route audio output to the iPhone speaker instead of glasses — useful for demos where others need to hear. For left/right spatial ping direction, keep this off and use glasses or stereo earbuds. iOS Settings → Accessibility → Audio: turn Mono Audio off."
+          )
+        ) {
           Toggle("Speaker Output", isOn: $speakerOutputEnabled)
         }
 

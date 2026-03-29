@@ -15,6 +15,7 @@
 //
 
 import CoreImage
+import simd
 import CoreMedia
 import CoreVideo
 import MWDATCamera
@@ -87,6 +88,15 @@ class StreamSessionViewModel: ObservableObject {
   @Published var depthMaxMs: Double = 0
   @Published var depthTotalFrames: Int = 0
   @Published var isInRoom: Bool = false
+
+  /// Latest depth inference output (aligned with `currentVideoFrame` when streaming).
+  @Published var latestDepthResult: DepthResult?
+  /// Image that produced `latestDepthResult` when `cameraPose` was passed into depth inference (iPhone).
+  private(set) var depthAlignedImage: UIImage?
+  /// Camera pose aligned with `latestDepthResult` / `depthAlignedImage` (same frame as infer input).
+  private(set) var depthAlignedCameraPose: simd_float4x4?
+  /// Latest camera world transform (iPhone mode). Copy from each `ARFrame` only — **never** retain `ARFrame` or ARKit exhausts its frame pool (~11).
+  private(set) var latestCameraTransform: simd_float4x4?
 
   private let depthEngine = DepthInferenceEngine()
   private var depthInferBusy = false
@@ -170,6 +180,10 @@ class StreamSessionViewModel: ObservableObject {
       if !depthModelLoaded { startDepthModelLoad() }
     } else {
       depthFrame = nil
+      latestDepthResult = nil
+      depthAlignedImage = nil
+      depthAlignedCameraPose = nil
+      latestCameraTransform = nil
       resetDepthLatencyStats()
       columnDepthEMA.reset()
       navigationAudioPolicy.reset()
@@ -209,7 +223,8 @@ class StreamSessionViewModel: ObservableObject {
     }
   }
 
-  private func scheduleDepthInference(on image: UIImage) {
+  /// - Parameter cameraPose: When non-nil (iPhone AR frame), depth + image + pose are stored together for room scan.
+  private func scheduleDepthInference(on image: UIImage, cameraPose: simd_float4x4? = nil) {
     guard depthInferenceEnabled, depthModelLoaded, !depthInferBusy else { return }
     depthInferBusy = true
     let engine = depthEngine
@@ -218,6 +233,15 @@ class StreamSessionViewModel: ObservableObject {
         let (result, ms) = try engine.infer(image: image)
         await MainActor.run { [weak self] in
           guard let self else { return }
+          self.latestDepthResult = result
+          if let p = cameraPose {
+            self.depthAlignedImage = image
+            self.depthAlignedCameraPose = p
+            self.audioEngine.updateCameraPose(p)
+          } else {
+            self.depthAlignedImage = nil
+            self.depthAlignedCameraPose = nil
+          }
           self.depthFrame = result.colorized
           self.audioEngine.visionDetector.detectPersons(
               image: image,
@@ -273,12 +297,19 @@ class StreamSessionViewModel: ObservableObject {
           if let nav = self.navigationController,
              nav.isNavigating,
              let guidance = nav.currentGuidance {
+            self.audioEngine.navigationPingCadenceFromStream = true
             let dist = Float(guidance.distanceToWaypoint)
             self.audioEngine.setNavigationPingInterval(SheikahPinger.sheikahInterval(distanceMeters: dist))
             self.audioEngine.setBeaconVolumeScale(nav.navigationPingVolumeScale)
             let azimuth = SheikahPinger.snapToZone(relativeBearingDegrees: Float(guidance.relativeBearing))
             let dm = max(5, min(120, dist))
-            self.audioEngine.setBeaconBearing(azimuth, distanceMeters: dm)
+            if self.audioEngine.beaconActive, !self.audioEngine.isBeaconOwnedByUserTool {
+              self.audioEngine.refreshNavigationBeacon(degrees: azimuth, distanceMeters: dm)
+            } else if !self.audioEngine.isBeaconOwnedByUserTool {
+              self.audioEngine.setBeaconBearing(azimuth, distanceMeters: dm, fromUserTool: false)
+            }
+          } else {
+            self.audioEngine.navigationPingCadenceFromStream = false
           }
 
           self.verbalCueController.process(
@@ -301,6 +332,7 @@ class StreamSessionViewModel: ObservableObject {
             && !(self.geminiSessionVM?.isModelSpeaking ?? false)
           if shouldScan {
             self.lastObstacleScanTime = now
+            self.audioEngine.flashObstacleCue(from: obstacle)
             self.geminiSessionVM?.sendObstacleScan()
           }
 
@@ -348,6 +380,10 @@ class StreamSessionViewModel: ObservableObject {
     audioEngine.cameraManager = nil
     currentVideoFrame = nil
     depthFrame = nil
+    latestDepthResult = nil
+    depthAlignedImage = nil
+    depthAlignedCameraPose = nil
+    latestCameraTransform = nil
     hasReceivedFirstFrame = false
     streamingStatus = .stopped
     NSLog("[Stream] iPhone camera stopped (source switch)")
@@ -368,7 +404,7 @@ class StreamSessionViewModel: ObservableObject {
           if !self.hasReceivedFirstFrame { self.hasReceivedFirstFrame = true }
           self.geminiSessionVM?.sendVideoFrameIfThrottled(image: image)
           self.webrtcSessionVM?.pushVideoFrame(image)
-          self.scheduleDepthInference(on: image)
+          self.scheduleDepthInference(on: image, cameraPose: nil)
           if self.backgroundFrameCount <= 5 || self.backgroundFrameCount % 120 == 0 {
             NSLog("[Stream] Background frame #%d decoded and forwarded (%dx%d)",
                   self.backgroundFrameCount, width, height)
@@ -419,7 +455,7 @@ class StreamSessionViewModel: ObservableObject {
             }
             self.geminiSessionVM?.sendVideoFrameIfThrottled(image: image)
             self.webrtcSessionVM?.pushVideoFrame(image)
-            self.scheduleDepthInference(on: image)
+            self.scheduleDepthInference(on: image, cameraPose: nil)
           }
         } else {
           // In background: makeUIImage() uses VideoToolbox GPU rendering which iOS suspends.
@@ -452,7 +488,7 @@ class StreamSessionViewModel: ObservableObject {
               if !self.hasReceivedFirstFrame { self.hasReceivedFirstFrame = true }
               self.geminiSessionVM?.sendVideoFrameIfThrottled(image: image)
               self.webrtcSessionVM?.pushVideoFrame(image)
-              self.scheduleDepthInference(on: image)
+              self.scheduleDepthInference(on: image, cameraPose: nil)
             }
             self.videoDecoder.invalidateSession()
           }
@@ -541,7 +577,7 @@ class StreamSessionViewModel: ObservableObject {
     streamingMode = .iPhone
     audioEngine.setGlassesMode(false)
     let camera = IPhoneCameraManager()
-    camera.onFrameCaptured = { [weak self] image in
+    camera.onFrameCaptured = { [weak self] image, frame in
       Task { @MainActor [weak self] in
         guard let self else { return }
         // Read the latest camera transform from the camera manager (no ARFrame retained)
@@ -549,6 +585,8 @@ class StreamSessionViewModel: ObservableObject {
           self.audioEngine.updateCameraTransform(cam.latestTransform)
         }
         self.currentVideoFrame = image
+        self.latestCameraTransform = frame.camera.transform
+        self.audioEngine.updateFromARFrame(frame)
         if !self.hasReceivedFirstFrame {
           self.hasReceivedFirstFrame = true
         }
@@ -570,6 +608,10 @@ class StreamSessionViewModel: ObservableObject {
     audioEngine.cameraManager = nil
     currentVideoFrame = nil
     depthFrame = nil
+    latestDepthResult = nil
+    depthAlignedImage = nil
+    depthAlignedCameraPose = nil
+    latestCameraTransform = nil
     hasReceivedFirstFrame = false
     streamingStatus = .stopped
     streamingMode = .glasses
@@ -597,6 +639,10 @@ class StreamSessionViewModel: ObservableObject {
     case .stopped:
       currentVideoFrame = nil
       depthFrame = nil
+      latestDepthResult = nil
+      depthAlignedImage = nil
+      depthAlignedCameraPose = nil
+      latestCameraTransform = nil
       streamingStatus = .stopped
       audioEngine.isEnabled = false
     case .waitingForDevice, .starting, .stopping, .paused:

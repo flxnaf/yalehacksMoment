@@ -31,6 +31,7 @@ struct MainAppView: View {
   #if DEBUG
   /// Custom tab selection so `StreamSessionView` stays mounted (lazy `TabView` was tearing it down and stopping video/Gemini context).
   @State private var debugSessionTab: Int = 0
+  @State private var spatialDebugLogCopied: Bool = false
   #endif
 
   init(wearables: WearablesInterface, viewModel: WearablesViewModel) {
@@ -59,6 +60,7 @@ struct MainAppView: View {
           streamViewModel.navigationController = nav
           geminiVM.navigationController = nav
           geminiVM.audioEngine = streamViewModel.audioEngine
+          geminiVM.streamSessionViewModel = streamViewModel
 
           if viewModel.autoStartIPhone {
             viewModel.autoStartIPhone = false
@@ -125,6 +127,18 @@ struct MainAppView: View {
             .frame(maxWidth: .infinity)
         }
         .foregroundStyle(debugSessionTab == 1 ? Color.accentColor : Color.secondary)
+
+        Button {
+          SpatialDebugLogExport.copyDocumentsLogToPasteboard()
+          spatialDebugLogCopied = true
+          DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            spatialDebugLogCopied = false
+          }
+        } label: {
+          Label(spatialDebugLogCopied ? "Copied" : "Log", systemImage: spatialDebugLogCopied ? "checkmark.circle" : "doc.on.doc")
+            .frame(maxWidth: .infinity)
+        }
+        .foregroundStyle(spatialDebugLogCopied ? Color.green : Color.secondary)
       }
       .padding(.vertical, 10)
       .background(.bar)

@@ -23,11 +23,20 @@ class GeminiSessionViewModel: ObservableObject {
 
   weak var navigationController: NavigationController?
   weak var audioEngine: SpatialAudioEngine?
+  weak var streamSessionViewModel: StreamSessionViewModel?
 
   var streamingMode: StreamingMode = .glasses
 
   var shouldUseGeminiForNavigationVoice: Bool {
     isGeminiActive && connectionState == .ready
+  }
+
+  /// Non-nil when OpenClaw is unreachable; use for status UI (token scopes, subscribe errors, etc.).
+  var openClawUnreachableReason: String? {
+    switch openClawConnectionState {
+    case .unreachable(let message): return message
+    default: return nil
+    }
   }
 
   /// True while a `speakNavigationForUser` line is awaiting Live TTS completion.
@@ -105,9 +114,13 @@ class GeminiSessionViewModel: ObservableObject {
     openClawBridge.resetSession()
 
     // Wire tool call handling (navigationController must be set on this VM before startSession — see MainAppView `.task`)
-    toolCallRouter = ToolCallRouter(bridge: openClawBridge,
-                                     navigationController: navigationController,
-                                     audioEngine: audioEngine)
+    toolCallRouter = ToolCallRouter(
+      bridge: openClawBridge,
+      navigationController: navigationController,
+      audioEngine: audioEngine,
+      streamSessionViewModel: streamSessionViewModel,
+      geminiSessionViewModel: self
+    )
 
     geminiService.onToolCall = { [weak self] toolCall in
       guard let self else { return }

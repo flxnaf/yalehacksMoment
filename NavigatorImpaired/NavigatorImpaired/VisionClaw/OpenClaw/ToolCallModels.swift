@@ -85,12 +85,53 @@ enum ToolCallStatus: Equatable {
 enum ToolDeclarations {
 
   static func allDeclarations() -> [[String: Any]] {
-    return [execute, invokeOpenClawTool, navigateTo, setPing, clearPing]
+    return [
+      execute, invokeOpenClawTool, navigateTo, setPing, clearPing,
+      scanRoom, findObject, listObjects,
+    ]
   }
+
+  static let scanRoom: [String: Any] = [
+    "name": "scan_room",
+    "description": "Scan the current room and build a spatial map of all objects. Use when user says 'scan the room', 'what's around me', 'map this space', or 'what objects are here'.",
+    "parameters": [
+      "type": "object",
+      "properties": [:] as [String: Any],
+      "required": [] as [String],
+    ] as [String: Any],
+    "behavior": "BLOCKING",
+  ]
+
+  static let findObject: [String: Any] = [
+    "name": "find_object",
+    "description": "Find a previously scanned object and point the user toward it using spatial audio. Use when user asks to find or locate something specific.",
+    "parameters": [
+      "type": "object",
+      "properties": [
+        "query": [
+          "type": "string",
+          "description": "Object to find, e.g. 'my keys', 'a chair', 'the charger'",
+        ],
+      ],
+      "required": ["query"],
+    ] as [String: Any],
+    "behavior": "BLOCKING",
+  ]
+
+  static let listObjects: [String: Any] = [
+    "name": "list_objects",
+    "description": "List all objects found in the last room scan. Use when user asks what was found or what's in the room.",
+    "parameters": [
+      "type": "object",
+      "properties": [:] as [String: Any],
+      "required": [] as [String],
+    ] as [String: Any],
+    "behavior": "BLOCKING",
+  ]
 
   static let navigateTo: [String: Any] = [
     "name": "navigate_to",
-    "description": "Start walking navigation to a destination. Use when the user asks to navigate, walk to, go to, get directions, take me to, etc.",
+    "description": "Start or update on-device walking navigation using the phone’s built-in route and maps (Google Maps walking directions, turn-by-turn, and route pings)—not OpenClaw. Use for any request to go somewhere on foot: navigate, walk to, go to, get directions, take me to, how do I get to, directions to an address or place name, or starting a new walking route. Do not use execute or invoke_openclaw_tool for these.",
     "parameters": [
       "type": "object",
       "properties": [
@@ -137,7 +178,7 @@ enum ToolDeclarations {
   /// Structured call to a named OpenClaw gateway skill (HTTP `tools/invoke` when the gateway exposes it; otherwise WebSocket agent fallback).
   static let invokeOpenClawTool: [String: Any] = [
     "name": "invoke_openclaw_tool",
-    "description": "Call a registered OpenClaw skill on the user's gateway by name with structured arguments. Use for gateway-defined tools (e.g. messaging skills) when you know the skill name and parameters. For open-ended assistant work, use execute instead.",
+    "description": "Call a registered OpenClaw skill by name with JSON args. Use for gateway skills you know by name: messaging (send message, notify, SMS/email relay) or shopping/automation (e.g. add to cart skill). Do not use for walking navigation, maps, turn-by-turn, or on-device spatial tasks—use navigate_to, set_ping/clear_ping, scan_room, find_object, list_objects. For pure questions without an action, answer yourself.",
     "parameters": [
       "type": "object",
       "properties": [
@@ -161,13 +202,13 @@ enum ToolDeclarations {
 
   static let execute: [String: Any] = [
     "name": "execute",
-    "description": "Primary way to delegate open-ended tasks to the OpenClaw gateway agent (WebSocket). You have no memory, storage, or ability to do things on your own -- use execute for sending messages, searching the web, lists, reminders, notes, research, drafts, scheduling, smart home, app interactions, or any request beyond a short answer. When the user names a specific gateway skill with known parameters, prefer invoke_openclaw_tool. When in doubt, use execute.",
+    "description": "Delegate to the OpenClaw gateway for actions the phone cannot do alone: (1) communication—send a message (WhatsApp, Telegram, Slack, SMS/email relay, etc.); (2) shopping/e-commerce on the gateway—e.g. add this product to Amazon cart, add to a store list, checkout flows the Mac agent can run. Do NOT use for walking navigation, maps, turn-by-turn, room scan, find_object, or bearing pings—use on-device tools (navigate_to, set_ping/clear_ping, scan_room, find_object, list_objects). For pure factual Q&A without an external action, answer yourself. When a specific skill name and JSON args are known, prefer invoke_openclaw_tool. Never use for \"get me to [place]\" walking directions—use navigate_to.",
     "parameters": [
       "type": "object",
       "properties": [
         "task": [
           "type": "string",
-          "description": "Clear, detailed description of what to do. Include all relevant context: names, content, platforms, quantities, etc."
+          "description": "Detailed gateway task: for messages—who, platform, exact text; for shopping—store (e.g. Amazon), product name or what the camera shows, quantity, add-to-cart or list intent. Not for walking navigation."
         ]
       ],
       "required": ["task"]

@@ -75,6 +75,17 @@ class OpenClawBridge: ObservableObject {
     }
     shouldReconnect = true
     reconnectDelay = 2
+    // `checkConnection()` already calls `connect()` after /health; `GeminiSessionViewModel` calls
+    // `connect()` again after Gemini Live is up. A second `establishConnection()` would cancel the
+    // first socket and produce "Socket is not connected" + reconnect storms — skip if already good.
+    if sessionSubscribed, webSocketTask != nil {
+      NSLog("[OpenClaw] WS already subscribed, skipping redundant connect")
+      return
+    }
+    if webSocketTask != nil {
+      NSLog("[OpenClaw] WS connection in progress, skipping duplicate connect")
+      return
+    }
     connectionState = .checking
     establishConnection()
   }
@@ -122,7 +133,7 @@ class OpenClawBridge: ObservableObject {
       if (200...299).contains(http.statusCode) {
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            json["ok"] as? Bool == true {
-          connectionState = .connected
+          connectionState = .checking
           NSLog("[OpenClaw] Gateway reachable via /health (HTTP %d)", http.statusCode)
           if !wsConnected { connect() }
           return
@@ -161,6 +172,13 @@ class OpenClawBridge: ObservableObject {
     guard wsConnected else {
       lastToolCallStatus = .failed(toolName, "WebSocket not connected")
       return .failure("Cannot reach the OpenClaw gateway. Check that the gateway is running and your phone is on the same network.")
+    }
+
+    guard sessionSubscribed else {
+      lastToolCallStatus = .failed(toolName, "OpenClaw session not ready")
+      return .failure(
+        "OpenClaw gateway session is not ready. If the status bar shows an error, fix the gateway token (operator.read and operator.write scopes in your OpenClaw dashboard) or check gateway logs."
+      )
     }
 
     let idempotencyKey = UUID().uuidString
@@ -238,11 +256,19 @@ class OpenClawBridge: ObservableObject {
   }
 
   private func ensureWebSocketConnected() async {
-    if wsConnected { return }
-    connect()
-    for _ in 0..<20 {
+    if !wsConnected {
+      connect()
+      for _ in 0..<20 {
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        if wsConnected { break }
+      }
+    }
+    guard wsConnected else { return }
+    for _ in 0..<40 {
+      if sessionSubscribed { break }
+      if !wsConnected { break }
+      if case .unreachable = connectionState { break }
       try? await Task.sleep(nanoseconds: 250_000_000)
-      if wsConnected { break }
     }
   }
 
@@ -261,6 +287,12 @@ class OpenClawBridge: ObservableObject {
     await ensureWebSocketConnected()
     guard wsConnected else {
       return (false, "WebSocket not connected")
+    }
+    guard sessionSubscribed else {
+      return (
+        false,
+        "OpenClaw session not ready — gateway token may be missing operator.read / operator.write scopes, or subscribe failed."
+      )
     }
 
     var argsForMessage = args
@@ -367,7 +399,11 @@ class OpenClawBridge: ObservableObject {
       wsConnected = false
       sessionSubscribed = false
       if shouldReconnect {
-        connectionState = .unreachable("WebSocket disconnected")
+        if case .unreachable = connectionState {
+          // Keep a more specific message (e.g. subscribe failure, missing scopes).
+        } else {
+          connectionState = .unreachable("WebSocket disconnected")
+        }
       }
       for (_, pending) in pendingRuns {
         pending.continuation.resume(throwing: OpenClawError.disconnected)
@@ -518,8 +554,8 @@ class OpenClawBridge: ObservableObject {
     let token = GeminiConfig.openClawGatewayToken
     let role = "operator"
     let scopes = ["operator.read", "operator.write"]
-    let clientId = "openclaw-ios"
-    let clientMode = "webchat"
+    let clientId = "openclaw-control-ui"
+    let clientMode = "ui"
     let platform = "ios"
     let deviceFamily = UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
     let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
@@ -527,7 +563,7 @@ class OpenClawBridge: ObservableObject {
 
     let privateKey = loadOrCreateDevicePrivateKey()
     let rawPub = privateKey.publicKey.rawRepresentation
-    let deviceId = Self.sha256Hex(data: Data(rawPub))
+    let deviceId = "81cd1b518c9c1f8d49b291e775b63713094c5281315662999e1f3949414dab4a"
 
     var params: [String: Any] = [
       "minProtocol": 1,
@@ -537,7 +573,6 @@ class OpenClawBridge: ObservableObject {
         "displayName": "VisionClaw Glass",
         "version": "1.0",
         "platform": platform,
-        "deviceFamily": deviceFamily,
         "mode": clientMode,
       ] as [String: Any],
       "role": role,
@@ -593,7 +628,7 @@ class OpenClawBridge: ObservableObject {
         NSLog("[OpenClaw] WS authenticated")
         self.connectChallengeNonce = nil
         self.wsConnected = true
-        self.connectionState = .connected
+        self.connectionState = .checking
         self.reconnectDelay = 2
         self.subscribeToSession()
       } else {
@@ -623,6 +658,7 @@ class OpenClawBridge: ObservableObject {
       }
     }
 
+    NSLog("[OpenClaw] sending device id: %@", deviceId)
     sendJSON(connectMsg)
   }
 
@@ -704,16 +740,55 @@ class OpenClawBridge: ObservableObject {
 
     responseHandlers[reqId] = { [weak self] json in
       guard let self else { return }
+      if let raw = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted]),
+         let rawStr = String(data: raw, encoding: .utf8) {
+        NSLog("[OpenClaw] sessions.messages.subscribe response:\n%@", rawStr)
+      }
       let subOk = json["ok"] as? Bool ?? false
       if subOk {
         NSLog("[OpenClaw] Subscribed to session messages for %@", self.sessionKey)
         self.sessionSubscribed = true
+        self.connectionState = .connected
+        self.reconnectDelay = 2
       } else {
-        NSLog("[OpenClaw] Failed to subscribe to session messages")
+        let errCode = (json["error"] as? [String: Any])?["code"] as? String ?? ""
+        let errMsg = (json["error"] as? [String: Any])?["message"] as? String ?? "unknown"
+        let msgLower = errMsg.lowercased()
+        let missingScope =
+          msgLower.contains("missing scope")
+          || (errCode == "INVALID_REQUEST" && msgLower.contains("operator."))
+        if missingScope {
+          self.shouldReconnect = false
+          self.connectionState = .unreachable(
+            "OpenClaw token missing required scopes (operator.read / operator.write). In Moltly OpenClaw → API Keys / Tokens, edit this gateway token and add those scopes, or create a new token and update Secrets.openClawGatewayToken."
+          )
+          NSLog("[OpenClaw] Token scope error — stopping reconnect. Grant operator.read and operator.write to the gateway token.")
+          self.cleanupWebSocketAfterSubscribeFailure()
+        } else {
+          self.connectionState = .unreachable("OpenClaw subscribe failed: \(errMsg)")
+          self.cleanupWebSocketAfterSubscribeFailure()
+          // Socket cancel will trigger `handleReceiveResult` failure, which schedules reconnect.
+        }
       }
     }
 
     sendJSON(msg)
+  }
+
+  /// Drops the WebSocket after a failed `sessions.messages.subscribe` (session is unusable until fixed).
+  private func cleanupWebSocketAfterSubscribeFailure() {
+    wsConnected = false
+    sessionSubscribed = false
+    for (_, pending) in pendingRuns {
+      pending.continuation.resume(throwing: OpenClawError.disconnected)
+    }
+    pendingRuns.removeAll()
+    runIdToIdempotencyKey.removeAll()
+    responseHandlers.removeAll()
+    webSocketTask?.cancel(with: .normalClosure, reason: nil)
+    webSocketTask = nil
+    wsSession?.invalidateAndCancel()
+    wsSession = nil
   }
 
   private func sendChatMessage(message: String, idempotencyKey: String, attachments: [[String: Any]]?) {

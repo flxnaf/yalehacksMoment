@@ -1,0 +1,12 @@
+---
+description: Outdoor navigation wiring — VisionClaw + NavigationController, not SightAssistController-only
+alwaysApply: true
+---
+
+# Outdoor navigation architecture
+
+When changing GPS walking routes, turn guidance, spatial pings, hazard scans, or nav audio:
+
+- **Live wiring** is **`MainAppView`** → **`NavigationControllerHolder`** / **`NavigationController`**, **`StreamSessionViewModel`**, **`GeminiSessionViewModel`**, **`ToolCallRouter`**, **`NavigationHazardScanCoordinator`**, **`SpatialAudioEngine`**, **`RouteService`**, **`FusedNavigator`**, **`LocationManager`**, **`ObstacleAnalyzer`**, **`NavigationAudioPolicy`**, **`SheikahPinger`**, **`NavSpeechCoordinator`** (see full file table in the repo).
+- **`AppMode.navigatingOutdoor`** and **`SightAssistController`** exist but are **not** the primary app wiring for the feature; do **not** assume mode changes there affect the VisionClaw stream path unless explicitly connected.
+- Canonical reference: [NavigatorImpaired/docs/OUTDOOR_NAVIGATION_ARCHITECTURE.md](NavigatorImpaired/docs/OUTDOOR_NAVIGATION_ARCHITECTURE.md).
