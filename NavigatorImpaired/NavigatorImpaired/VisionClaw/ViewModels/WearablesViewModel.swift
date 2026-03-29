@@ -30,6 +30,7 @@ class WearablesViewModel: ObservableObject {
   @Published var showError: Bool = false
   @Published var errorMessage: String = ""
   @Published var skipToIPhoneMode: Bool = false
+  @Published var autoStartIPhone: Bool = false
 
   private var registrationTask: Task<Void, Never>?
   private var deviceStreamTask: Task<Void, Never>?

@@ -86,6 +86,7 @@ struct HomeScreenView: View {
             style: .secondary,
             isDisabled: false
           ) {
+            viewModel.autoStartIPhone = true
             viewModel.skipToIPhoneMode = true
           }
         }

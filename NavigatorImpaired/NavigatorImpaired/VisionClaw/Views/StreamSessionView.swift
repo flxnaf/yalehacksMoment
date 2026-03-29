@@ -75,6 +75,11 @@ struct StreamSessionView: View {
       viewModel.navigationController = nav
       geminiVM.navigationController = nav
       geminiVM.audioEngine = viewModel.audioEngine
+
+      if wearablesViewModel.autoStartIPhone {
+        wearablesViewModel.autoStartIPhone = false
+        await viewModel.handleStartIPhone()
+      }
     }
     .onChange(of: viewModel.streamingMode) { newMode in
       geminiVM.streamingMode = newMode
