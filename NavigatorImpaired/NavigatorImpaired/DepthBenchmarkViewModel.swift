@@ -27,6 +27,7 @@ class DepthBenchmarkViewModel: ObservableObject {
     private(set) var glassesCam: GlassesStreamManager?
 
     let audioEngine = SpatialAudioEngine()
+    let objectDetector = ObjectDetector()
 
     private let columnDepthEMA = ColumnDepthEMA()
     private let navigationAudioPolicy = NavigationAudioPolicyEngine()
@@ -217,6 +218,21 @@ class DepthBenchmarkViewModel: ObservableObject {
                         width: result.mapWidth,
                         height: result.mapHeight,
                         policyOutput: policyOut
+                    )
+                    // Fast offline path: zone-crop VNClassifyImageRequest at ~1 Hz.
+                    self.objectDetector.detectAndAnnounce(
+                        image: image,
+                        depthMap: result.depthMap,
+                        depthWidth: result.mapWidth,
+                        depthHeight: result.mapHeight
+                    )
+                    // Smart path: Gemini Vision fires when depth confirms something ≤2 m ahead.
+                    // Rate-limited to once per 4 s — won't spam during sustained proximity.
+                    self.objectDetector.detectWithGeminiIfClose(
+                        image: image,
+                        depthMap: result.depthMap,
+                        depthWidth: result.mapWidth,
+                        depthHeight: result.mapHeight
                     )
                     self.latency.record(ms)
                     self.latestMs = ms
