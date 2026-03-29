@@ -27,6 +27,7 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
                  doorDetected: Bool = false,
                  corridorDetected: Bool = false,
                  geminiSpeaking: Bool,
+                 isNavigating: Bool = false,
                  depthProfile: [Float] = [],
                  heading: Float = 0) {
         if !depthProfile.isEmpty {
@@ -35,7 +36,7 @@ final class NavigationVerbalCueController: NSObject, ObservableObject {
                 clearThreshold: PathFinder.clearThreshold,
                 heading: heading
             ) {
-                if !geminiSpeaking { speak(roomCue) }
+                if !geminiSpeaking, !isNavigating { speak(roomCue) }
             }
         }
     }

@@ -313,6 +313,19 @@ final class SpatialAudioEngine: ObservableObject {
     /// The latest ARFrame camera transform, updated every frame (~60 fps).
     private var latestCameraTransform: simd_float4x4?
 
+    /// Extra multiplier for shrine ping (navigation ducking near waypoints). Applied with policy duck.
+    private var beaconVolumeScale: Float = 1.0
+
+    /// Smoothed GPS-derived bearing to beacon (prevents jitter from GPS noise).
+    private var smoothedGPSBearing: Float = 0
+
+    /// Frozen GPS bearing used when the user is stationary (speed < threshold).
+    /// GPS bearing is only updated when the user is actually moving.
+    private var lockedGPSBearing: Float = 0
+    private var isGPSBearingLocked: Bool = false
+
+    // (prevGyroYaw removed — Apple's .xMagneticNorthZVertical handles fusion internally)
+
     // MARK: - Observers
 
     private var interruptionObserver: NSObjectProtocol?
@@ -346,6 +359,15 @@ final class SpatialAudioEngine: ObservableObject {
     /// Heading in radians for legacy callers (verbal cue controller, etc.).
     var currentHeading: Float {
         fusedHeadingDegrees * Float.pi / 180
+    }
+
+    func setNavigationPingInterval(_ seconds: Float) {
+        let clamped = max(0.4, min(5.0, seconds))
+        shrinePing.pingInterval = clamped
+    }
+
+    func setBeaconVolumeScale(_ scale: Float) {
+        beaconVolumeScale = max(0, min(1, scale))
     }
 
     /// Place the shrine ping at a bearing relative to where the user is
@@ -385,6 +407,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
 
         beaconActive = true
+        beaconVolumeScale = 1
         shrinePing.targetVolume = 0.70
         relativeBeaconAngle = degrees
     }
@@ -409,6 +432,7 @@ final class SpatialAudioEngine: ObservableObject {
         beaconCoordinate = nil
         waypointWorldPosition = nil
         pendingBeacon = nil
+        beaconVolumeScale = 1
         shrinePing.targetVolume = 0
         shoreAudio.stop()
         isOnTarget = false
@@ -479,7 +503,7 @@ final class SpatialAudioEngine: ObservableObject {
         detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
 
         if beaconActive {
-            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.70
+            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.70 * beaconVolumeScale
         }
 
         updateCount += 1
@@ -686,6 +710,8 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     private func stopEngine() {
+        beaconVolumeScale = 1
+        shrinePing.pingInterval = 2.0
         shrinePing.targetVolume = 0
         shoreAudio.stop()
         isOnTarget = false

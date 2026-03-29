@@ -11,6 +11,7 @@
 		BED202F02F758F7100B0C0A4 /* MWDATCamera in Frameworks */ = {isa = PBXBuildFile; productRef = BED202EF2F758F7100B0C0A4 /* MWDATCamera */; };
 		BED202F22F758F7100B0C0A4 /* MWDATCore in Frameworks */ = {isa = PBXBuildFile; productRef = BED202F12F758F7100B0C0A4 /* MWDATCore */; };
 		BED202F42F758F8300B0C0A4 /* MWDATMockDevice in Frameworks */ = {isa = PBXBuildFile; productRef = BED202F32F758F8300B0C0A4 /* MWDATMockDevice */; };
+		GMAP10032F90000100B0C0A4 /* GoogleMaps in Frameworks */ = {isa = PBXBuildFile; productRef = GMAP10022F90000100B0C0A4 /* GoogleMaps */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				GMAP10032F90000100B0C0A4 /* GoogleMaps in Frameworks */,
 				BED202F02F758F7100B0C0A4 /* MWDATCamera in Frameworks */,
 				BED202F42F758F8300B0C0A4 /* MWDATMockDevice in Frameworks */,
 				BED202F22F758F7100B0C0A4 /* MWDATCore in Frameworks */,
@@ -130,6 +132,7 @@
 			mainGroup = BED202A82F758B0500B0C0A4;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				GMAP10012F90000100B0C0A4 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */,
 				BED202ED2F758E6A00B0C0A4 /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */,
 				AADDE0012F77000100B0C0A4 /* XCRemoteSwiftPackageReference "WebRTC" */,
 			);
@@ -199,7 +202,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = YSN2XT3872;
+				DEVELOPMENT_TEAM = YC67GWUGZX;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -263,7 +266,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = YSN2XT3872;
+				DEVELOPMENT_TEAM = YC67GWUGZX;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -339,6 +342,78 @@
 			};
 			name = Release;
 		};
+		BED202D62F758B0600B0C0A4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YC67GWUGZX;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alanakwan.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NavigatorImpaired.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NavigatorImpaired";
+			};
+			name = Debug;
+		};
+		BED202D72F758B0600B0C0A4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YC67GWUGZX;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alanakwan.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NavigatorImpaired.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NavigatorImpaired";
+			};
+			name = Release;
+		};
+		BED202D92F758B0600B0C0A4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YC67GWUGZX;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alanakwan.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = NavigatorImpaired;
+			};
+			name = Debug;
+		};
+		BED202DA2F758B0600B0C0A4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YC67GWUGZX;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.alanakwan.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = NavigatorImpaired;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -379,6 +454,14 @@
 				minimumVersion = 0.5.0;
 			};
 		};
+		GMAP10012F90000100B0C0A4 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/googlemaps/ios-maps-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 10.10.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -401,6 +484,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = BED202ED2F758E6A00B0C0A4 /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
 			productName = MWDATMockDevice;
+		};
+		GMAP10022F90000100B0C0A4 /* GoogleMaps */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = GMAP10012F90000100B0C0A4 /* XCRemoteSwiftPackageReference "ios-maps-sdk" */;
+			productName = GoogleMaps;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

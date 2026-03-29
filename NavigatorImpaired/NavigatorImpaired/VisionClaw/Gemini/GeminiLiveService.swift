@@ -164,13 +164,14 @@ class GeminiLiveService: ObservableObject {
   func sendTextMessage(_ text: String) {
     guard connectionState == .ready else { return }
     sendQueue.async { [weak self] in
-      let msg: [String: Any] = [
-        "clientContent": [
-          "turns": [
-            ["role": "user", "parts": [["text": text]]]
-          ]
-        ]
+      // turnComplete is required or the server waits for more client input and may not generate audio.
+      let clientContent: [String: Any] = [
+        "turns": [
+          ["role": "user", "parts": [["text": text]]]
+        ],
+        "turnComplete": true
       ]
+      let msg: [String: Any] = ["clientContent": clientContent]
       self?.sendJSON(msg)
     }
   }

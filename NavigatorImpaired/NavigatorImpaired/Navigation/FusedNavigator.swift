@@ -38,11 +38,12 @@ final class FusedNavigator {
         }
 
         var voice = waypointInstruction
+        // Spatial-only cues (avoid generic "obstacle" — Gemini hazard scan names real objects).
         if obstacles.urgency > 0.4 {
             switch obstacles.recommendedDirection {
-            case "left": voice += ". Obstacle ahead, step left"
-            case "right": voice += ". Obstacle ahead, step right"
-            case "stop": voice += ". Stop, obstacle very close"
+            case "left": voice += ". Tight space on your right—step left"
+            case "right": voice += ". Tight space on your left—step right"
+            case "stop": voice += ". Stop—something very close ahead"
             default: break
             }
         }
@@ -68,7 +69,8 @@ final class FusedNavigator {
     func shouldSpeak(guidance: NavigationGuidance) -> Bool {
         let distDelta = abs(guidance.distanceToWaypoint - lastSpokenDistance)
         let bearDelta = abs(guidance.relativeBearing - lastSpokenBearing)
-        if distDelta > 5.0 || bearDelta > 30 {
+        // Looser thresholds + NavigationController time cooldown reduce GPS/compass jitter repeats.
+        if distDelta > 12.0 || bearDelta > 48 {
             return true
         }
         return false

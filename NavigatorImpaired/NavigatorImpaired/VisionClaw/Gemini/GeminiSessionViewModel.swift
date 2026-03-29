@@ -17,11 +17,23 @@ class GeminiSessionViewModel: ObservableObject {
   private let audioManager = AudioManager()
   private var lastVideoFrameTime: Date = .distantPast
   private var stateObservation: Task<Void, Never>?
+  /// Completions for `speakNavigationForUser`; advanced on `onTurnComplete` (may skew if other turns interleave).
+  private var navigationUtteranceCompletions: [(() -> Void)?] = []
+  private var pendingNavigationSpeakTurns: Int = 0
 
   weak var navigationController: NavigationController?
   weak var audioEngine: SpatialAudioEngine?
 
   var streamingMode: StreamingMode = .glasses
+
+  var shouldUseGeminiForNavigationVoice: Bool {
+    isGeminiActive && connectionState == .ready
+  }
+
+  /// True while a `speakNavigationForUser` line is awaiting Live TTS completion.
+  var isNavigationVoiceBusy: Bool {
+    pendingNavigationSpeakTurns > 0
+  }
 
   func startSession() async {
     guard !isGeminiActive else { return }
@@ -59,6 +71,7 @@ class GeminiSessionViewModel: ObservableObject {
       Task { @MainActor in
         // Clear user transcript when AI finishes responding
         self.userTranscript = ""
+        self.advanceNavigationUtteranceCompletionIfNeeded()
       }
     }
 
@@ -91,7 +104,7 @@ class GeminiSessionViewModel: ObservableObject {
     await openClawBridge.checkConnection()
     openClawBridge.resetSession()
 
-    // Wire tool call handling (navigationController must be set on this VM before startSession — see StreamSessionView `.task`)
+    // Wire tool call handling (navigationController must be set on this VM before startSession — see MainAppView `.task`)
     toolCallRouter = ToolCallRouter(bridge: openClawBridge,
                                      navigationController: navigationController,
                                      audioEngine: audioEngine)
@@ -185,6 +198,10 @@ class GeminiSessionViewModel: ObservableObject {
 
   func stopSession() {
     LastGeminiVideoFrame.clear()
+    let pending = navigationUtteranceCompletions
+    navigationUtteranceCompletions.removeAll()
+    pendingNavigationSpeakTurns = 0
+    for c in pending { c?() }
     navigationController?.stopNavigation()
     openClawBridge.disconnect()
     toolCallRouter?.cancelAll()
@@ -199,6 +216,58 @@ class GeminiSessionViewModel: ObservableObject {
     userTranscript = ""
     aiTranscript = ""
     toolCallStatus = .idle
+  }
+
+  /// Injects one-shot navigation context into the Live session (`clientContent`).
+  func sendNavigationHandoff(_ text: String) {
+    guard isGeminiActive, connectionState == .ready else { return }
+    geminiService.sendTextMessage(text)
+  }
+
+  /// Speaks a navigation line through the same Live voice as the assistant when the session is ready.
+  func speakNavigationForUser(_ text: String, completion: (() -> Void)?) {
+    guard shouldUseGeminiForNavigationVoice else {
+      completion?()
+      return
+    }
+    let plain = Self.plainTextForNavigationSpeech(text)
+    guard !plain.isEmpty else {
+      completion?()
+      return
+    }
+    pendingNavigationSpeakTurns += 1
+    navigationUtteranceCompletions.append(completion)
+    // First line is the marker; everything after the newline is exactly what should be spoken (Directions API text).
+    let wrapped = "[NAVIGATION_ONLY]\n\(plain)"
+    geminiService.sendTextMessage(wrapped)
+  }
+
+  /// Strip HTML / entities from Google Directions `html_instructions` so TTS matches the API wording.
+  private static func plainTextForNavigationSpeech(_ raw: String) -> String {
+    var s = raw
+    if let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: []) {
+      let range = NSRange(s.startIndex..., in: s)
+      s = regex.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: " ")
+    }
+    s = s.replacingOccurrences(of: "&nbsp;", with: " ")
+      .replacingOccurrences(of: "&amp;", with: "&")
+      .replacingOccurrences(of: "&lt;", with: "<")
+      .replacingOccurrences(of: "&gt;", with: ">")
+      .replacingOccurrences(of: "&#39;", with: "'")
+      .replacingOccurrences(of: "&quot;", with: "\"")
+    if let regex = try? NSRegularExpression(pattern: "[ \t\n]+", options: []) {
+      let range = NSRange(s.startIndex..., in: s)
+      s = regex.stringByReplacingMatches(in: s, options: [], range: range, withTemplate: " ")
+    }
+    return s.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func advanceNavigationUtteranceCompletionIfNeeded() {
+    guard pendingNavigationSpeakTurns > 0 else { return }
+    pendingNavigationSpeakTurns -= 1
+    guard !navigationUtteranceCompletions.isEmpty else { return }
+    let done = navigationUtteranceCompletions.removeFirst()
+    done?()
   }
 
   func sendVideoFrameIfThrottled(image: UIImage) {

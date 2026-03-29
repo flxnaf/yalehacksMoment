@@ -1,6 +1,6 @@
 import CoreLocation
 
-/// A single point along a walking route.
+/// Legacy micro-waypoint (removed from production pipeline; kept for compatibility if needed).
 struct RouteWaypoint {
     let coordinate: CLLocationCoordinate2D
     let bearingToNext: Double
@@ -8,10 +8,15 @@ struct RouteWaypoint {
     let instruction: String
 }
 
-/// Complete route from origin to destination.
+/// Walking route with dense checkpoints and sparse ping targets.
 struct NavigationRoute {
-    let waypoints: [RouteWaypoint]
+    let checkpoints: [RouteCheckpoint]
+    let pingTargets: [PingTarget]
     let totalDistanceMeters: Double
     let estimatedDurationSeconds: Double
     let destinationName: String
+    /// Destination coordinate from the last ping target (or last checkpoint).
+    var destinationCoordinate: CLLocationCoordinate2D? {
+        pingTargets.last?.coordinate ?? checkpoints.last?.coordinate
+    }
 }
