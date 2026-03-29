@@ -8,8 +8,6 @@ final class GuardianAlertManager: NSObject, ObservableObject, CLLocationManagerD
     static let shared = GuardianAlertManager()
 
     private static let configKey = "guardianConfig"
-    static let gx10BaseURLKey = "gx10BaseURL"
-    static let gx10ModelKey = "gx10Model"
     static let sendGridRelayBaseURLKey = "sendGridRelayBaseURL"
     static let sendGridRelaySecretKey = "sendGridRelaySecret"
 
@@ -116,13 +114,7 @@ final class GuardianAlertManager: NSObject, ObservableObject, CLLocationManagerD
             return
         }
 
-        // Only call GX10 when the user saved a base URL; otherwise we used to hit 127.0.0.1 on-device and
-        // could block the whole alert on a 120s URLSession timeout. Always cap vision latency so email sends.
-        var sceneText = ""
-        if let frame, let data = frame.jpegData(compressionQuality: 0.75),
-           Self.isGX10ExplicitlyConfigured() {
-            sceneText = await Self.sceneDescriptionForFallAlert(imageData: data)
-        }
+        let sceneText = ""
 
         let timeStr = Self.shortDateTime.string(from: Date())
         let locStr = Self.formatMapsLink(location: currentLocation)
@@ -285,18 +277,7 @@ Location: \(locStr)
         let type: String
     }
 
-    private enum SceneDescriptionRace: Sendable {
-        case text(String)
-        case timedOut
-    }
-
-    private static func isGX10ExplicitlyConfigured() -> Bool {
-        let raw = UserDefaults.standard.string(forKey: gx10BaseURLKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !raw.isEmpty
-    }
-
-    /// Smaller JPEG for `POST /tools/invoke` JSON (same scene as email: last Gemini / camera frame).
+    /// Smaller JPEG for OpenClaw fall_alert args (same scene as email: last Gemini / camera frame).
     private static let maxOpenClawFallImageBytes = 450_000
 
     private static func jpegDataForOpenClawFallAlert(from image: UIImage) -> Data? {
@@ -324,37 +305,6 @@ Location: \(locStr)
             return nil
         }
         return data
-    }
-
-    /// First completion wins: GX10 description (errors → empty string) or hard timeout so relay email is never starved.
-    private static func sceneDescriptionForFallAlert(imageData: Data) async -> String {
-        let prompt =
-            "Describe this scene in one sentence for an emergency contact. Focus on where the person is and what's around them."
-        let capNs: UInt64 = 15_000_000_000
-        return await withTaskGroup(of: SceneDescriptionRace.self) { group in
-            group.addTask {
-                do {
-                    let s = try await GX10InferenceClient.shared.describeImage(imageData: imageData, prompt: prompt)
-                    return .text(s)
-                } catch {
-                    return .text("")
-                }
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: capNs)
-                return .timedOut
-            }
-            guard let first = await group.next() else {
-                return ""
-            }
-            group.cancelAll()
-            switch first {
-            case .text(let s):
-                return s
-            case .timedOut:
-                return ""
-            }
-        }
     }
 
     /// POST to Node `sgQuickstart`: SendGrid sends plain text + optional JPEG attachment (base64).

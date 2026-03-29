@@ -1,5 +1,7 @@
 import Foundation
 
+// NOTE: The NavigatorImpaired app uses WebSocket `chat.send` on OpenClawBridge; this sample may still reference legacy REST for local experimentation.
+
 enum OpenClawConnectionState: Equatable {
   case notConfigured
   case checking

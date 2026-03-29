@@ -134,10 +134,10 @@ enum ToolDeclarations {
     "behavior": "BLOCKING"
   ]
 
-  /// Structured call to a named OpenClaw gateway skill (`POST /tools/invoke`). Prefer this when the user names a specific skill or you need precise JSON arguments.
+  /// Structured call to a named OpenClaw gateway skill (HTTP `tools/invoke` when the gateway exposes it; otherwise WebSocket agent fallback).
   static let invokeOpenClawTool: [String: Any] = [
     "name": "invoke_openclaw_tool",
-    "description": "Call a registered OpenClaw skill on the user's gateway by name with structured arguments (HTTP POST /tools/invoke). Use for gateway-defined tools (e.g. messaging skills) when you know the skill name and parameters. For open-ended assistant work, use execute instead.",
+    "description": "Call a registered OpenClaw skill on the user's gateway by name with structured arguments. Use for gateway-defined tools (e.g. messaging skills) when you know the skill name and parameters. For open-ended assistant work, use execute instead.",
     "parameters": [
       "type": "object",
       "properties": [
@@ -161,7 +161,7 @@ enum ToolDeclarations {
 
   static let execute: [String: Any] = [
     "name": "execute",
-    "description": "Primary way to delegate open-ended tasks to the OpenClaw agent (chat completions). You have no memory, storage, or ability to do things on your own -- use execute for sending messages, searching the web, lists, reminders, notes, research, drafts, scheduling, smart home, app interactions, or any request beyond a short answer. When the user names a specific gateway skill with known parameters, prefer invoke_openclaw_tool. When in doubt, use execute.",
+    "description": "Primary way to delegate open-ended tasks to the OpenClaw gateway agent (WebSocket). You have no memory, storage, or ability to do things on your own -- use execute for sending messages, searching the web, lists, reminders, notes, research, drafts, scheduling, smart home, app interactions, or any request beyond a short answer. When the user names a specific gateway skill with known parameters, prefer invoke_openclaw_tool. When in doubt, use execute.",
     "parameters": [
       "type": "object",
       "properties": [

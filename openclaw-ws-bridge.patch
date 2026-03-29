@@ -1,0 +1,329 @@
+From 66e423522ee4a6e7f2c61b1448719f21f3a69b78 Mon Sep 17 00:00:00 2001
+From: OpenClaw <openclaw@localhost>
+Date: Sun, 29 Mar 2026 04:55:38 +0000
+Subject: [PATCH] feat: rewrite OpenClawBridge to use WebSocket instead of REST
+
+Replaces the HTTP POST /v1/chat/completions approach with the native
+OpenClaw WebSocket protocol (chat.send + session.message events).
+
+Changes:
+
+OpenClawBridge now connects via WS, authenticates, subscribes to
+session messages, and sends chat via chat.send method
+Health check uses GET /health (always works, no config needed)
+Absorbs OpenClawEventClient notification handling (heartbeat/cron)
+GeminiSessionViewModel uses bridge.onNotification instead of
+separate eventClient
+invokeTool (POST /tools/invoke) unchanged - still HTTP
+No gateway config changes required (chatCompletions endpoint
+not needed)
+This eliminates the dependency on gateway.http.endpoints.chatCompletions
+which is disabled by default.
+.../Gemini/GeminiSessionViewModel.swift | 12 +-
+.../VisionClaw/OpenClaw/OpenClawBridge.swift | 546 ++++++++++++++----
+.../VisionClaw/Settings/SettingsView.swift | 10 +-
+3 files changed, 436 insertions(+), 132 deletions(-)
+
+diff --git a/NavigatorImpaired/NavigatorImpaired/VisionClaw/Gemini/GeminiSessionViewModel.swift b/NavigatorImpaired/NavigatorImpaired/VisionClaw/Gemini/GeminiSessionViewModel.swift
+index 26d8e66..21a586a 100644
+--- a/NavigatorImpaired/NavigatorImpaired/VisionClaw/Gemini/GeminiSessionViewModel.swift
++++ b/NavigatorImpaired/NavigatorImpaired/VisionClaw/Gemini/GeminiSessionViewModel.swift
+@@ -15,7 +15,7 @@ class GeminiSessionViewModel: ObservableObject {
+private let openClawBridge = OpenClawBridge()
+private var toolCallRouter: ToolCallRouter?
+private let audioManager = AudioManager()
+
+private let eventClient = OpenClawEventClient()
+// OpenClawEventClient removed — OpenClawBridge now handles WS events + chat
+private var lastVideoFrameTime: Date = .distantPast
+private var stateObservation: Task<Void, Never>?
+@@ -169,23 +169,25 @@ class GeminiSessionViewModel: ObservableObject {
+return
+}
+
+// Connect to OpenClaw event stream for proactive notifications
+// Wire proactive notifications from OpenClaw (heartbeat/cron) into Gemini
+// The bridge's WS connection handles events alongside chat.send
+if SettingsManager.shared.proactiveNotificationsEnabled {
+Copy
+ eventClient.onNotification = { [weak self] text in
+Copy
+ openClawBridge.onNotification = { [weak self] text in
+   guard let self else { return }
+   Task { @MainActor in
+     guard self.isGeminiActive, self.connectionState == .ready else { return }
+     self.geminiService.sendTextMessage(text)
+   }
+ }
+Copy
+ eventClient.connect()
+}
+// Ensure bridge WS is connected (checkConnection above triggers it)
+openClawBridge.connect()
+}
+
+func stopSession() {
+LastGeminiVideoFrame.clear()
+navigationController?.stopNavigation()
+
+eventClient.disconnect()
+openClawBridge.disconnect()
+toolCallRouter?.cancelAll()
+toolCallRouter = nil
+audioManager.stopCapture()
+diff --git a/NavigatorImpaired/NavigatorImpaired/VisionClaw/OpenClaw/OpenClawBridge.swift b/NavigatorImpaired/NavigatorImpaired/VisionClaw/OpenClaw/OpenClawBridge.swift
+index 3d2a5f9..90ece2c 100644
+--- a/NavigatorImpaired/NavigatorImpaired/VisionClaw/OpenClaw/OpenClawBridge.swift
++++ b/NavigatorImpaired/NavigatorImpaired/VisionClaw/OpenClaw/OpenClawBridge.swift
+@@ -7,117 +7,137 @@ enum OpenClawConnectionState: Equatable {
+case unreachable(String)
+}
++/// Communicates with the OpenClaw gateway exclusively over WebSocket.
++///
++/// Protocol summary:
++/// 1. Connect WS to ws(s)://host:port
++/// 2. Gateway sends {type:"event", event:"connect.challenge"}
++/// 3. Client sends {type:"req", method:"connect", params:{auth,client,...}}
++/// 4. Gateway replies {type:"res", ok:true, ...} → authenticated
++/// 5. Subscribe to session messages: {type:"req", method:"sessions.messages.subscribe", params:{key:sessionKey}}
++/// 6. Send a chat message: {type:"req", method:"chat.send", params:{sessionKey, message, idempotencyKey}}
++/// → immediate {type:"res", ok:true, payload:{runId, status:"started"}}
++/// → streamed {type:"event", event:"session.message", payload:{sessionKey, message:{role,content,...}}}
++/// → final message has status:"final" or role=="assistant"
++/// 7. POST /tools/invoke still uses HTTP (unchanged).
+@MainActor
+class OpenClawBridge: ObservableObject {
+@Published var lastToolCallStatus: ToolCallStatus = .idle
+@Published var connectionState: OpenClawConnectionState = .notConfigured
+
+private let session: URLSession
+// MARK: - WebSocket state
+private var webSocketTask: URLSessionWebSocketTask?
+private var wsSession: URLSession?
+private var wsConnected = false
+private var shouldReconnect = false
+private var reconnectDelay: TimeInterval = 2
+private let maxReconnectDelay: TimeInterval = 30
+private var sessionSubscribed = false
+/// Pending chat.send completions keyed by idempotencyKey (== runId).
+/// The continuation is resumed with the full assistant reply once the
+/// gateway finishes streaming.
+private var pendingRuns: [String: PendingRun] = [:]
+private struct PendingRun {
+let continuation: CheckedContinuation<String, Error>
+var fragments: [String] = []
+var runId: String?
+}
+private let sessionKey = "agent:main:glass"
+// HTTP session for /tools/invoke and /health (unchanged)
+private let httpSession: URLSession
+private let pingSession: URLSession
+private var sessionKey: String
+
+private var conversationHistory: [[String: String]] = []
+
+private let maxHistoryTurns = 10
+
+private static let stableSessionKey = "agent:main:glass"
+
+// Notification callback (replaces OpenClawEventClient when bridge is primary)
+
+var onNotification: ((String) -> Void)?
+
+init() {
+let config = URLSessionConfiguration.default
+config.timeoutIntervalForRequest = 120
+
+self.session = URLSession(configuration: config)
+self.httpSession = URLSession(configuration: config)
+
+let pingConfig = URLSessionConfiguration.default
+pingConfig.timeoutIntervalForRequest = 5
+self.pingSession = URLSession(configuration: pingConfig)
+
+self.sessionKey = OpenClawBridge.stableSessionKey
+}
+
+func checkConnection() async {
+// MARK: - Connection lifecycle
+func connect() {
+guard GeminiConfig.isOpenClawConfigured else {
+connectionState = .notConfigured
+Copy
+ NSLog("[OpenClaw] Not configured, skipping WS connect")
+ return
+}
+shouldReconnect = true
+reconnectDelay = 2
+connectionState = .checking
+let base = "(GeminiConfig.openClawHost):(GeminiConfig.openClawPort)"
+if await tryHealthCheck(baseURL: base) {
+Copy
+ return
+}
+await checkConnectionViaChatCompletions(baseURL: base)
+establishConnection()
+}
+
+/// Returns true if the gateway responded 2xx to GET /health.
+private func tryHealthCheck(baseURL: String) async -> Bool {
+guard let url = URL(string: "(baseURL)/health") else {
+Copy
+ return false
+func disconnect() {
+shouldReconnect = false
+wsConnected = false
+sessionSubscribed = false
+webSocketTask?.cancel(with: .normalClosure, reason: nil)
+webSocketTask = nil
+wsSession?.invalidateAndCancel()
+wsSession = nil
+connectionState = .notConfigured
+// Fail any pending runs
+for (key, pending) in pendingRuns {
+Copy
+ pending.continuation.resume(throwing: OpenClawError.disconnected)
+Copy
+ pendingRuns.removeValue(forKey: key)
+}
+var request = URLRequest(url: url)
+request.httpMethod = "GET"
+request.setValue("Bearer (GeminiConfig.openClawGatewayToken)", forHTTPHeaderField: "Authorization")
+request.setValue("glass", forHTTPHeaderField: "x-openclaw-message-channel")
+do {
+Copy
+ let (_, response) = try await pingSession.data(for: request)
+Copy
+ guard let http = response as? HTTPURLResponse else { return false }
+Copy
+ if (200...299).contains(http.statusCode) {
+Copy
+   connectionState = .connected
+Copy
+   NSLog("[OpenClaw] Gateway reachable via /health (HTTP %d)", http.statusCode)
+Copy
+   return true
+Copy
+ }
+Copy
+ NSLog("[OpenClaw] GET /health HTTP %d, falling back to POST chat completions", http.statusCode)
+} catch {
+Copy
+ NSLog("[OpenClaw] GET /health failed (%@), falling back to POST", error.localizedDescription)
+}
+return false
+NSLog("[OpenClaw] WS disconnected")
+}
+
+private func checkConnectionViaChatCompletions(baseURL: String) async {
+guard let url = URL(string: "(baseURL)/v1/chat/completions") else {
+/// HTTP health check (lightweight, does not require WS)
+func checkConnection() async {
+guard GeminiConfig.isOpenClawConfigured else {
+Copy
+ connectionState = .notConfigured
+Copy
+ return
+}
+connectionState = .checking
+let base = "(GeminiConfig.openClawHost):(GeminiConfig.openClawPort)"
+guard let url = URL(string: "(base)/health") else {
+connectionState = .unreachable("Invalid URL")
+return
+}
+var request = URLRequest(url: url)
+request.httpMethod = "POST"
+request.setValue("Bearer (GeminiConfig.openClawGatewayToken)", forHTTPHeaderField: "Authorization")
+request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+request.setValue(sessionKey, forHTTPHeaderField: "x-openclaw-session-key")
+request.setValue("glass", forHTTPHeaderField: "x-openclaw-message-channel")
+let pingBody: [String: Any] = [
+Copy
+ "model": "openclaw",
+Copy
+ "messages": [["role": "user", "content": "__openclaw_connectivity_check__"]],
+Copy
+ "stream": false,
+]
+request.httpMethod = "GET"
+do {
+Copy
+ request.httpBody = try JSONSerialization.data(withJSONObject: pingBody)
+Copy
+ let (_, response) = try await pingSession.data(for: request)
+Copy
+ let (data, response) = try await pingSession.data(for: request)
+ guard let http = response as? HTTPURLResponse else {
+Copy
+   connectionState = .unreachable("Unexpected response")
+Copy
+   connectionState = .unreachable("No HTTP response")
+   return
+ }
+ if (200...299).contains(http.statusCode) {
+Copy
+   connectionState = .connected
+Copy
+   NSLog("[OpenClaw] Gateway reachable via chat completions (HTTP %d)", http.statusCode)
+Copy
+   return
+Copy
+ }
+Copy
+ if http.statusCode == 401 || http.statusCode == 403 {
+Copy
+   connectionState = .unreachable(
+Copy
+     "Unauthorized (HTTP \(http.statusCode)): check Gateway token matches gateway auth.token"
+Copy
+   )
+Copy
+   return
+Copy
+   // Parse JSON to confirm it's actually the gateway
+Copy
+   if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+Copy
+      json["ok"] as? Bool == true {
+Copy
+     connectionState = .connected
+Copy
+     NSLog("[OpenClaw] Gateway reachable via /health (HTTP %d)", http.statusCode)
+Copy
+     // Also establish WS if not already connected
+Copy
+     if !wsConnected { connect() }
+Copy
+     return
+Copy
+   }
+ }
+Copy
+ connectionState = .unreachable("Gateway returned HTTP \(http.statusCode)")
+Copy
+ connectionState = .unreachable("HTTP \(http.statusCode)")
+} catch {
+connectionState = .unreachable(error.localizedDescription)
+Copy
+ NSLog("[OpenClaw] Gateway unreachable: %@", error.localizedDescription)
+}
+}
+
+func resetSession() {
+
+conversationHistory = []
+
+NSLog("[OpenClaw] Session reset (key retained: %@)", sessionKey)
+
+NSLog("[OpenClaw] Session reset (key: %@)", sessionKey)
+}
+
+// MARK: - Agent Chat (session continuity via x-openclaw-session-key header)
+// MARK: - Agent Chat via WebSocket (chat.send)
+
+func delegateTask(
+task: String,
+@@ -128,68 +148,36 @@ class OpenClawBridge: ObservableObject {
+guard GeminiConfig.isOpenClawConfigur
+...(truncated)...
+

@@ -21,7 +21,7 @@ enum GeminiConfig {
 
     CRITICAL: You have NO memory, NO storage, and NO ability to take actions on your own. You cannot remember things, keep lists, set reminders, search the web, send messages, or do anything persistent. You are ONLY a voice interface.
 
-    Tools: execute (OpenClaw agent chat), invoke_openclaw_tool (named gateway skill with JSON args via POST /tools/invoke), navigate_to, set_ping, and clear_ping. execute connects you to a powerful assistant for open-ended work. invoke_openclaw_tool is for registered gateway skills when you know the exact skill name and arguments. navigate_to starts on-device walking navigation with Google Maps.
+    Tools: execute (OpenClaw gateway agent over WebSocket), invoke_openclaw_tool (gateway skill with JSON args — HTTP tools/invoke when enabled, otherwise agent fallback), navigate_to, set_ping, and clear_ping. execute connects you to a powerful assistant for open-ended work. invoke_openclaw_tool is for registered gateway skills when you know the exact skill name and arguments. navigate_to starts on-device walking navigation with Google Maps.
 
     When the user wants walking directions or to go to a named place, call navigate_to with the destination string. Examples: "navigate to Walgreens", "take me to the library", "directions to the coffee shop".
 
@@ -56,6 +56,7 @@ enum GeminiConfig {
   static var openClawPort: Int { SettingsManager.shared.openClawPort }
   static var openClawHookToken: String { SettingsManager.shared.openClawHookToken }
   static var openClawGatewayToken: String { SettingsManager.shared.openClawGatewayToken }
+  static var openClawWebSocketPath: String { SettingsManager.shared.openClawWebSocketPath }
 
   static func websocketURL() -> URL? {
     guard apiKey != "YOUR_GEMINI_API_KEY" && !apiKey.isEmpty else { return nil }

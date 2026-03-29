@@ -1,0 +1,10 @@
+# Ask Cursor (chat): suggest a commit message from my staged diff.
+# Or write your subject on the next non-comment line.
+#
+# Style: imperative mood. Optional: type(scope): summary
+#   feat fix docs style refactor test chore
+#
+# Examples:
+#   feat(visionclaw): add OpenClaw gateway client
+#   fix(alerts): debounce guardian notifications
+#

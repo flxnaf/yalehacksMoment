@@ -9,6 +9,7 @@ struct SettingsView: View {
   @State private var openClawPort: String = ""
   @State private var openClawHookToken: String = ""
   @State private var openClawGatewayToken: String = ""
+  @State private var openClawWebSocketPath: String = ""
   @State private var geminiSystemPrompt: String = ""
   @State private var webrtcSignalingURL: String = ""
   @State private var speakerOutputEnabled: Bool = false
@@ -22,8 +23,6 @@ struct SettingsView: View {
   @State private var guardianWhatsApp: String = ""
   @State private var sendGridRelayBaseURL: String = ""
   @State private var sendGridRelaySecret: String = ""
-  @State private var gx10BaseURL: String = ""
-  @State private var gx10Model: String = ""
   @State private var showGuardianValidationAlert = false
   @State private var guardianValidationMessage = ""
 
@@ -51,7 +50,7 @@ struct SettingsView: View {
         Section(
           header: Text("OpenClaw"),
           footer: Text(
-            "Agentic tools need a reachable gateway (same Wi‑Fi or a tunnel). Use your Mac’s Wi‑Fi IP or .local hostname — addresses like 172.17.x.x are often Docker-only and won’t work from the phone. Gateway token must match the gateway’s auth.token exactly (Authorization: Bearer). The app checks GET /health first, then POST /v1/chat/completions; only HTTP 2xx counts as connected."
+            "Agentic tools use the OpenClaw WebSocket gateway (`agent` RPC) after GET /health. Use your Mac’s Wi‑Fi IP or .local hostname — on a physical iPhone, localhost/127.0.0.1 refers to the phone, not your Mac. 172.17.x.x is often Docker-only. Gateway token must match auth.token. Hosted gateways (e.g. Moltly) require one-time device pairing in the provider’s OpenClaw dashboard — check Xcode logs for the full device id if the app shows “pairing required.” Optional WebSocket path (e.g. /ws) if your reverse proxy requires it; leave empty for the default root path."
           )
         ) {
           VStack(alignment: .leading, spacing: 4) {
@@ -93,6 +92,16 @@ struct SettingsView: View {
               .disableAutocorrection(true)
               .font(.system(.body, design: .monospaced))
           }
+
+          VStack(alignment: .leading, spacing: 4) {
+            Text("WebSocket path (optional)")
+              .font(.caption)
+              .foregroundColor(.secondary)
+            TextField("/ws or leave empty", text: $openClawWebSocketPath)
+              .autocapitalization(.none)
+              .disableAutocorrection(true)
+              .font(.system(.body, design: .monospaced))
+          }
         }
 
         Section(header: Text("WebRTC")) {
@@ -123,7 +132,7 @@ struct SettingsView: View {
         Section(
           header: Text("Guardian / Fall alert"),
           footer: Text(
-            "After the SOS countdown: email via sgQuickstart relay (http:// + Mac LAN IP), SMS to Guardian phone if set, and WhatsApp via OpenClaw tool fall_alert if WhatsApp number is set and OpenClaw is configured. Load skills/fall_alert.js on your gateway. SMS opens Messages (you may need to tap Send). Relay secret optional if .env has RELAY_SECRET. GX10 optional for scene text."
+            "After the SOS countdown: email via sgQuickstart relay (http:// + Mac LAN IP), SMS to Guardian phone if set, and WhatsApp via OpenClaw tool fall_alert if WhatsApp number is set and OpenClaw is configured. Load skills/fall_alert.js on your gateway. SMS opens Messages (you may need to tap Send). Relay secret optional if .env has RELAY_SECRET."
           )
         ) {
           VStack(alignment: .leading, spacing: 4) {
@@ -160,7 +169,7 @@ struct SettingsView: View {
             Text("Guardian WhatsApp (optional, E.164)")
               .font(.caption)
               .foregroundColor(.secondary)
-            Text("Uses OpenClaw POST /tools/invoke with tool fall_alert after countdown. Same gateway token as Settings → OpenClaw.")
+            Text("Uses OpenClaw tool fall_alert after countdown (HTTP tools/invoke when available, otherwise WebSocket agent fallback). Same gateway token as Settings → OpenClaw.")
               .font(.caption2)
               .foregroundColor(.secondary)
             TextField("+15551234567", text: $guardianWhatsApp)
@@ -186,30 +195,6 @@ struct SettingsView: View {
               .font(.caption)
               .foregroundColor(.secondary)
             SecureField("RELAY_SECRET", text: $sendGridRelaySecret)
-              .autocapitalization(.none)
-              .disableAutocorrection(true)
-              .font(.system(.body, design: .monospaced))
-          }
-
-          VStack(alignment: .leading, spacing: 4) {
-            Text("GX10 base URL (optional)")
-              .font(.caption)
-              .foregroundColor(.secondary)
-            Text("On device, use your Mac’s LAN IP if GX10 runs on the Mac — not 127.0.0.1.")
-              .font(.caption2)
-              .foregroundColor(.secondary)
-            TextField("http://127.0.0.1:8000", text: $gx10BaseURL)
-              .autocapitalization(.none)
-              .disableAutocorrection(true)
-              .keyboardType(.URL)
-              .font(.system(.body, design: .monospaced))
-          }
-
-          VStack(alignment: .leading, spacing: 4) {
-            Text("GX10 model id (optional)")
-              .font(.caption)
-              .foregroundColor(.secondary)
-            TextField("Qwen/Qwen2.5-VL-7B-Instruct", text: $gx10Model)
               .autocapitalization(.none)
               .disableAutocorrection(true)
               .font(.system(.body, design: .monospaced))
@@ -249,8 +234,8 @@ struct SettingsView: View {
         Button("Reset", role: .destructive) {
           settings.resetAll()
           GuardianAlertManager.shared.clearGuardianConfig()
-          UserDefaults.standard.removeObject(forKey: GuardianAlertManager.gx10BaseURLKey)
-          UserDefaults.standard.removeObject(forKey: GuardianAlertManager.gx10ModelKey)
+          UserDefaults.standard.removeObject(forKey: "gx10BaseURL")
+          UserDefaults.standard.removeObject(forKey: "gx10Model")
           UserDefaults.standard.removeObject(forKey: "imgbbApiKey")
           UserDefaults.standard.removeObject(forKey: GuardianAlertManager.sendGridRelayBaseURLKey)
           UserDefaults.standard.removeObject(forKey: GuardianAlertManager.sendGridRelaySecretKey)
@@ -273,6 +258,7 @@ struct SettingsView: View {
     openClawPort = String(settings.openClawPort)
     openClawHookToken = settings.openClawHookToken
     openClawGatewayToken = settings.openClawGatewayToken
+    openClawWebSocketPath = settings.openClawWebSocketPath
     webrtcSignalingURL = settings.webrtcSignalingURL
     speakerOutputEnabled = settings.speakerOutputEnabled
     videoStreamingEnabled = settings.videoStreamingEnabled
@@ -289,8 +275,6 @@ struct SettingsView: View {
       guardianPhone = ""
       guardianWhatsApp = ""
     }
-    gx10BaseURL = UserDefaults.standard.string(forKey: GuardianAlertManager.gx10BaseURLKey) ?? ""
-    gx10Model = UserDefaults.standard.string(forKey: GuardianAlertManager.gx10ModelKey) ?? ""
     sendGridRelayBaseURL = UserDefaults.standard.string(forKey: GuardianAlertManager.sendGridRelayBaseURLKey) ?? ""
     sendGridRelaySecret = UserDefaults.standard.string(forKey: GuardianAlertManager.sendGridRelaySecretKey) ?? ""
   }
@@ -332,6 +316,7 @@ struct SettingsView: View {
     }
     settings.openClawHookToken = openClawHookToken.trimmingCharacters(in: .whitespacesAndNewlines)
     settings.openClawGatewayToken = openClawGatewayToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    settings.openClawWebSocketPath = openClawWebSocketPath.trimmingCharacters(in: .whitespacesAndNewlines)
     settings.webrtcSignalingURL = webrtcSignalingURL.trimmingCharacters(in: .whitespacesAndNewlines)
     settings.speakerOutputEnabled = speakerOutputEnabled
     settings.videoStreamingEnabled = videoStreamingEnabled
@@ -350,8 +335,6 @@ struct SettingsView: View {
       GuardianAlertManager.shared.saveConfig(cfg)
     }
 
-    persistOptionalDefaults(gx10BaseURL, GuardianAlertManager.gx10BaseURLKey)
-    persistOptionalDefaults(gx10Model, GuardianAlertManager.gx10ModelKey)
     persistOptionalDefaults(sendGridRelayBaseURL, GuardianAlertManager.sendGridRelayBaseURLKey)
     persistOptionalDefaults(sendGridRelaySecret, GuardianAlertManager.sendGridRelaySecretKey)
 
