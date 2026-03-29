@@ -104,97 +104,142 @@ final class ShrinePingVoice {
 
 // MARK: - Shore Ambient Voice (on-target reward sound)
 
-/// Gentle ship's-bell chime over soft ocean waves — plays when the user
-/// is looking in the right direction (on-target). Think: arriving at a
-/// dock in a video game.
-///
-/// Bell: inharmonic metallic partials with long reverberant decay.
-/// Waves: band-filtered noise with slow amplitude modulation.
+/// Double bell chime ("ding-ding") over rolling ocean surf. Plays one
+/// full cycle when the user looks on-target. If they stay on-target the
+/// cycle repeats. If they look away mid-cycle, it fades out. Looking
+/// back always restarts from the beginning.
 final class ShoreAmbientVoice {
 
-    var targetVolume: Float = 0
+    /// Set > 0 to play, 0 to fade out. When transitioning 0→>0, the
+    /// voice resets to the start of a fresh cycle.
+    var targetVolume: Float = 0 {
+        didSet {
+            if oldValue < 0.001 && targetVolume > 0.001 {
+                resetCycle()
+            }
+        }
+    }
 
     private let sr: Float
     private var currentVolume: Float = 0
-    private let slewRate: Float = 0.003
+    private let volumeSlew: Float = 0.006
 
-    // Bell state
-    private var bellPhases: [Float] = [0, 0, 0, 0, 0]
+    // MARK: Double-bell state
+
+    private enum BellState { case idle, ding1, gap, ding2, tail }
+    private var bellState: BellState = .idle
+    private var bellSamplesInState: Int = 0
     private var bellEnvelope: Float = 0
-    private var bellCooldown: Int = 0
-    private var bellSamplesSinceLast: Int = 0
-    private let bellInterval: Int
-    private var bellTriggered: Bool = false
+    private var bellPhases: [Float] = [0, 0, 0, 0, 0]
 
-    private let bellFreqs: [Float] = [
-        880.0,    // A5 — fundamental
-        1760.0,   // A6 — octave
-        2349.3,   // D7 — inharmonic (gives metallic quality)
-        3135.96,  // G7 — another inharmonic partial
-        4698.63,  // D8 — shimmer
-    ]
-    private let bellAmps: [Float] = [1.0, 0.5, 0.3, 0.15, 0.08]
+    private let ding1Duration: Int
+    private let gapDuration: Int
+    private let ding2Duration: Int
+    private let cycleLength: Int
 
-    // Ocean wave state
+    private var cyclePosition: Int = 0
+
+    private let bellFreqs: [Float]  = [880, 1760, 2217.46, 3135.96, 4434.92]
+    private let bellAmps: [Float]   = [1.0, 0.45, 0.3, 0.12, 0.06]
+    private let ding1Pitch: Float = 1.0
+    private let ding2Pitch: Float = 1.26
+
+    // MARK: Ocean surf state
+
     private var noiseState: UInt32 = 0xDEADBEEF
     private var wavePhase: Float = 0
-    private let waveFreq: Float = 0.12
-    private var lpState: Float = 0
+    private let waveSpeed: Float = 0.14
+    private var lpA: Float = 0
+    private var lpB: Float = 0
 
     init(sampleRate: Float) {
-        self.sr = sampleRate
-        self.bellInterval = Int(3.5 * sampleRate)
-        self.bellSamplesSinceLast = bellInterval
+        sr = sampleRate
+        ding1Duration = Int(0.09 * sampleRate)
+        gapDuration   = Int(0.14 * sampleRate)
+        ding2Duration = Int(0.09 * sampleRate)
+        cycleLength   = Int(3.2 * sampleRate)
+    }
+
+    private func resetCycle() {
+        bellState = .ding1
+        bellSamplesInState = 0
+        bellEnvelope = 1.0
+        cyclePosition = 0
+        for j in 0..<bellPhases.count { bellPhases[j] = 0 }
+        wavePhase = 0
+        lpA = 0
+        lpB = 0
     }
 
     func render(into buffer: UnsafeMutablePointer<Float>, frameCount: Int) {
         let tv = targetVolume
         for i in 0..<frameCount {
-            currentVolume += (tv - currentVolume) * slewRate
+            currentVolume += (tv - currentVolume) * volumeSlew
 
             var sample: Float = 0
 
-            // --- Ocean waves (always playing when volume > 0) ---
+            // --- Ocean surf ---
             let noise = nextNoise()
-            lpState += (noise - lpState) * 0.002
-            let filteredNoise = lpState
+            lpA += (noise - lpA) * 0.035
+            lpB += (lpA - lpB) * 0.035
 
-            wavePhase += waveFreq / sr
+            wavePhase += waveSpeed / sr
             if wavePhase >= 1.0 { wavePhase -= 1.0 }
-            let waveMod = (sinf(2 * .pi * wavePhase) * 0.5 + 0.5)
-            let waveSecondary = (sinf(2 * .pi * wavePhase * 0.37 + 1.2) * 0.5 + 0.5) * 0.4
-            let waveEnv = waveMod + waveSecondary
-            sample += filteredNoise * waveEnv * 0.12
+            let crest  = sinf(2 * .pi * wavePhase) * 0.5 + 0.5
+            let swell  = sinf(2 * .pi * wavePhase * 0.31 + 0.8) * 0.5 + 0.5
+            let waveAmp = crest * 0.7 + swell * 0.3
+            sample += lpB * waveAmp * 0.45
 
-            // --- Ship's bell chime ---
-            bellSamplesSinceLast += 1
+            // --- Double bell ---
+            bellSamplesInState += 1
+            cyclePosition += 1
 
-            if !bellTriggered && bellSamplesSinceLast >= bellInterval && currentVolume > 0.01 {
-                bellTriggered = true
-                bellEnvelope = 1.0
-                for j in 0..<bellPhases.count { bellPhases[j] = 0 }
-                bellSamplesSinceLast = 0
-            }
-
-            if bellTriggered {
-                var bellSample: Float = 0
-                for j in 0..<bellFreqs.count {
-                    bellSample += sinf(2 * .pi * bellPhases[j]) * bellAmps[j]
-                    bellPhases[j] += bellFreqs[j] / sr
-                    if bellPhases[j] >= 1.0 { bellPhases[j] -= 1.0 }
+            switch bellState {
+            case .idle:
+                if cyclePosition >= cycleLength && currentVolume > 0.01 {
+                    resetCycle()
                 }
-                bellSample *= bellEnvelope / 2.0
-                bellEnvelope *= expf(-1.8 / sr)
-
+            case .ding1:
+                let pitchBend = 1.0 + 0.03 * max(0, 1 - Float(bellSamplesInState) / Float(ding1Duration))
+                sample += renderBell(pitchMult: ding1Pitch * pitchBend)
+                bellEnvelope *= expf(-4.0 / sr)
+                if bellSamplesInState >= ding1Duration {
+                    bellState = .gap; bellSamplesInState = 0
+                }
+            case .gap:
+                bellEnvelope *= 0.97
+                if bellSamplesInState >= gapDuration {
+                    bellState = .ding2; bellSamplesInState = 0
+                    bellEnvelope = 0.9
+                    for j in 0..<bellPhases.count { bellPhases[j] = 0 }
+                }
+            case .ding2:
+                let pitchBend = 1.0 + 0.02 * max(0, 1 - Float(bellSamplesInState) / Float(ding2Duration))
+                sample += renderBell(pitchMult: ding2Pitch * pitchBend)
+                bellEnvelope *= expf(-4.5 / sr)
+                if bellSamplesInState >= ding2Duration {
+                    bellState = .tail; bellSamplesInState = 0
+                }
+            case .tail:
+                sample += renderBell(pitchMult: ding2Pitch) * 0.25
+                bellEnvelope *= expf(-6.0 / sr)
                 if bellEnvelope < 0.001 {
-                    bellTriggered = false
-                    bellEnvelope = 0
+                    bellState = .idle; bellEnvelope = 0
                 }
-                sample += bellSample
             }
 
             buffer[i] = sample * currentVolume
         }
+    }
+
+    private func renderBell(pitchMult: Float) -> Float {
+        var out: Float = 0
+        for j in 0..<bellFreqs.count {
+            out += sinf(2 * .pi * bellPhases[j]) * bellAmps[j]
+            bellPhases[j] += (bellFreqs[j] * pitchMult) / sr
+            if bellPhases[j] >= 1.0 { bellPhases[j] -= 1.0 }
+        }
+        return out * bellEnvelope * 0.5
     }
 
     private func nextNoise() -> Float {
@@ -538,10 +583,16 @@ final class SpatialAudioEngine: ObservableObject {
 
         shrineNode?.position = AVAudio3DPoint(x: x, y: 0, z: z)
 
-        // On-target: within ±8° → play shore ambient (bell + waves)
+        // On-target: within ±8° → play shore ambient, mute shrine ping
         let onTarget = abs(relativeBeaconAngle) < 8
         isOnTarget = onTarget
-        shoreAmbient.targetVolume = onTarget ? 0.55 : 0
+        if onTarget {
+            shoreAmbient.targetVolume = 0.6
+            shrinePing.targetVolume = 0
+        } else {
+            shoreAmbient.targetVolume = 0
+            shrinePing.targetVolume = 0.70
+        }
 
         posLogCount += 1
         if posLogCount % 120 == 1 {
