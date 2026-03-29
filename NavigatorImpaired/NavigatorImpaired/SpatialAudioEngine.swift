@@ -511,13 +511,11 @@ final class SpatialAudioEngine: ObservableObject {
             return
         }
 
-        // --- Direction: pure gyro-relative (rock solid, no magnetometer) ---
+        // --- Direction: gyro-relative + GPS recalibration when walking ---
         if !gyroYawAtPlacement.isNaN && !currentGyroYaw.isNaN {
             var yawDelta = currentGyroYaw - gyroYawAtPlacement
             if yawDelta > .pi { yawDelta -= 2 * .pi }
             if yawDelta < -.pi { yawDelta += 2 * .pi }
-            // Gyro yaw increases CCW, so turning right (CW) = negative delta.
-            // Turning right should move the beacon left → subtract delta.
             let gyroRelative = initialRelativeAngle + Float(yawDelta * 180.0 / .pi)
             let rawRelative = Self.wrapAngle(gyroRelative)
 
@@ -528,7 +526,7 @@ final class SpatialAudioEngine: ObservableObject {
             )
         }
 
-        // --- Distance: GPS (only used for distance, not direction) ---
+        // --- GPS: distance + lateral movement correction ---
         if let beaconCoord = beaconCoordinate,
            let userCoord = LocationManager.shared.currentCoordinate {
             let userLoc = CLLocation(latitude: userCoord.latitude, longitude: userCoord.longitude)
@@ -540,6 +538,25 @@ final class SpatialAudioEngine: ObservableObject {
                 clearBeacon()
                 AudioOrchestrator.shared.enqueue("You've arrived.", priority: .hazard)
                 return
+            }
+
+            // When walking, GPS bearing accounts for lateral movement
+            // (sidestepping). Gently recalibrate the gyro baseline so
+            // the ping shifts to reflect the new geometric angle.
+            let speed = LocationManager.shared.currentSpeed
+            if speed > 0.5 && !currentGyroYaw.isNaN {
+                let gpsBearing = Float(Self.bearing(from: userCoord, to: beaconCoord))
+                let compassHeading = Float(LocationManager.shared.currentHeading)
+                guard compassHeading > 0 else { return }
+                let gpsRelative = Self.wrapAngle(gpsBearing - compassHeading)
+
+                var yawDelta = currentGyroYaw - gyroYawAtPlacement
+                if yawDelta > .pi { yawDelta -= 2 * .pi }
+                if yawDelta < -.pi { yawDelta += 2 * .pi }
+                let gyroRelative = initialRelativeAngle + Float(yawDelta * 180.0 / .pi)
+
+                let correction = Self.wrapAngle(gpsRelative - gyroRelative)
+                initialRelativeAngle += correction * 0.03
             }
         }
 
