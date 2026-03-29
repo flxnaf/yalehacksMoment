@@ -361,6 +361,11 @@ final class SpatialAudioEngine: ObservableObject {
     /// currently facing. 0 = ahead, -90 = left, +90 = right.
     /// `distanceMeters` sets how far away the beacon is (default 10m).
     func setBeaconBearing(_ degrees: Float, distanceMeters: Float = 10) {
+        // Auto-enable if not already running (e.g., user hasn't toggled it on)
+        if !isEnabled {
+            isEnabled = true
+        }
+
         beaconBearingDegrees = degrees
         beaconInitialDistance = distanceMeters
         beaconDistanceMeters = distanceMeters
@@ -633,24 +638,31 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     private func startEngine() {
-        configureSession()
-        guard !avEngine.isRunning else { return }
-        do {
-            try avEngine.start()
-        } catch {
-            print("[SpatialAudio] Engine start failed: \(error)")
-            isEnabled = false
-            return
+        configureSessionIfNeeded()
+        if !avEngine.isRunning {
+            do {
+                try avEngine.start()
+            } catch {
+                print("[SpatialAudio] Engine start failed: \(error)")
+                isEnabled = false
+                return
+            }
         }
         LocationManager.shared.requestPermissionAndStart()
         fusedHeadingDegrees = Float(LocationManager.shared.currentHeading)
         startMotionTracking()
         haptics.start()
-        print("[SpatialAudio] Started — compass + gyro fusion, heading=\(String(format: "%.0f", fusedHeadingDegrees))°")
+        print("[SpatialAudio] Started — gyro tracking active, heading=\(String(format: "%.0f", fusedHeadingDegrees))°")
     }
 
-    private func configureSession() {
+    /// Only configure the audio session if it hasn't already been set up
+    /// (e.g., by Gemini's AudioManager). Avoids stomping on an active session.
+    private func configureSessionIfNeeded() {
         let session = AVAudioSession.sharedInstance()
+        if session.category == .playAndRecord {
+            print("[SpatialAudio] Session already configured (likely by Gemini), skipping")
+            return
+        }
         do {
             try session.setCategory(
                 .playAndRecord,
@@ -698,7 +710,7 @@ final class SpatialAudioEngine: ObservableObject {
             let type = (note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt)
                 .flatMap(AVAudioSession.InterruptionType.init) ?? .began
             if type == .ended {
-                self.configureSession()
+                self.configureSessionIfNeeded()
                 try? self.avEngine.start()
             }
         }
@@ -714,7 +726,7 @@ final class SpatialAudioEngine: ObservableObject {
             if reason == .categoryChange || reason == .override {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                     guard let self, self.isEnabled, !self.avEngine.isRunning else { return }
-                    self.configureSession()
+                    self.configureSessionIfNeeded()
                     try? self.avEngine.start()
                 }
             }
@@ -725,7 +737,7 @@ final class SpatialAudioEngine: ObservableObject {
             object: nil, queue: .main
         ) { [weak self] _ in
             guard let self, self.isEnabled, !self.avEngine.isRunning else { return }
-            self.configureSession()
+            self.configureSessionIfNeeded()
             try? self.avEngine.start()
         }
 
