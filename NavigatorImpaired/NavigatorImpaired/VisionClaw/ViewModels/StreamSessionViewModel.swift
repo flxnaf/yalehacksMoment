@@ -234,13 +234,8 @@ class StreamSessionViewModel: ObservableObject {
         await MainActor.run { [weak self] in
           guard let self else { return }
           self.latestDepthResult = result
-          if let p = cameraPose {
-            self.depthAlignedImage = image
-            self.depthAlignedCameraPose = p
-            self.audioEngine.updateCameraPose(p)
-          } else {
-            self.depthAlignedImage = nil
-            self.depthAlignedCameraPose = nil
+          if cameraPose != nil {
+            self.audioEngine.updateCameraTransform(self.iPhoneCameraManager?.latestTransform ?? matrix_identity_float4x4)
           }
           self.depthFrame = result.colorized
           self.audioEngine.visionDetector.detectPersons(
@@ -577,16 +572,14 @@ class StreamSessionViewModel: ObservableObject {
     streamingMode = .iPhone
     audioEngine.setGlassesMode(false)
     let camera = IPhoneCameraManager()
-    camera.onFrameCaptured = { [weak self] image, frame in
+    camera.onFrameCaptured = { [weak self] image in
       Task { @MainActor [weak self] in
         guard let self else { return }
-        // Read the latest camera transform from the camera manager (no ARFrame retained)
         if let cam = self.iPhoneCameraManager {
           self.audioEngine.updateCameraTransform(cam.latestTransform)
+          self.latestCameraTransform = cam.latestTransform
         }
         self.currentVideoFrame = image
-        self.latestCameraTransform = frame.camera.transform
-        self.audioEngine.updateFromARFrame(frame)
         if !self.hasReceivedFirstFrame {
           self.hasReceivedFirstFrame = true
         }

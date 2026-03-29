@@ -333,6 +333,22 @@ final class SpatialAudioEngine: ObservableObject {
     /// When true, skip auto-clear on arrival (approximate world positions from room scan).
     private var suppressArrivalAutoClear = false
 
+    /// Whether the current beacon is an indoor object from room scan (vs outdoor GPS).
+    private var beaconIsIndoorObject = false
+    private var beaconSetTime: Date = .distantPast
+    private let indoorFoundItProximityMeters: Float = 1.5
+
+    /// Obstacle flash overlay (temporary directional flash for hazard warnings).
+    private var obstacleFlashUntil: Date?
+    private var obstacleFlashBearingDeg: Float?
+
+    /// Distance-muffle EQ applied to shrine ping as beacon gets farther away.
+    private var shrineDistanceEQ: AVAudioUnitEQ?
+    private var lastDistanceEQCutoffHz: Float = 20_000
+
+    /// Whether navigation is currently controlling ping cadence.
+    var navigationPingCadenceFromStream = false
+
     /// Extra multiplier for shrine ping (navigation ducking near waypoints). Applied with policy duck.
     private var beaconVolumeScale: Float = 1.0
 
@@ -344,15 +360,28 @@ final class SpatialAudioEngine: ObservableObject {
     private let onTargetEnterDegrees: Float = 20
     private let onTargetExitDegrees: Float = 28
 
-    /// Smoothed GPS-derived bearing to beacon (prevents jitter from GPS noise).
-    private var smoothedGPSBearing: Float = 0
+    func setNavigationPingInterval(_ interval: Float) {
+        shrinePing.pingInterval = interval
+    }
 
-    /// Frozen GPS bearing used when the user is stationary (speed < threshold).
-    /// GPS bearing is only updated when the user is actually moving.
-    private var lockedGPSBearing: Float = 0
-    private var isGPSBearingLocked: Bool = false
+    func setBeaconVolumeScale(_ scale: Float) {
+        beaconVolumeScale = scale
+    }
 
-    // (prevGyroYaw removed — Apple's .xMagneticNorthZVertical handles fusion internally)
+    var isBeaconOwnedByUserTool: Bool { beaconControlledByUserTools }
+
+    func refreshNavigationBeacon(degrees: Float, distanceMeters: Float) {
+        beaconBearingDegrees = degrees
+        beaconDistanceMeters = distanceMeters
+    }
+
+    func flashObstacleCue(from obstacle: Any) {
+        obstacleFlashUntil = Date().addingTimeInterval(2.0)
+    }
+
+    func releaseUserBeaconControlForNavigation() {
+        beaconControlledByUserTools = false
+    }
 
     // MARK: - Observers
 
@@ -416,9 +445,25 @@ final class SpatialAudioEngine: ObservableObject {
         }
     }
 
-    func setBeaconBearing(_ degrees: Float, distanceMeters: Float = 10) {
+    func setBeacon(atWorldPosition pos: simd_float3) {
+        if !isEnabled { isEnabled = true }
+        beaconControlledByUserTools = true
+        suppressArrivalAutoClear = true
+        beaconIsIndoorObject = true
+        beaconSetTime = Date()
+        waypointWorldPosition = pos
+        pendingBeaconRequest = nil
+
+        beaconActive = true
+        shrinePing.targetVolume = 0.70
+        updateShrineNodePosition()
+        print("[SpatialAudio] Beacon set at world position \(pos) (room scan object)")
+    }
+
+    func setBeaconBearing(_ degrees: Float, distanceMeters: Float = 10, fromUserTool: Bool = false) {
         if !isEnabled { isEnabled = true }
 
+        if fromUserTool { beaconControlledByUserTools = true }
         beaconIsIndoorObject = false
         beaconBearingDegrees = degrees
         beaconInitialDistance = distanceMeters
@@ -710,7 +755,8 @@ final class SpatialAudioEngine: ObservableObject {
 
         // Audio spatialization
         let rad = relativeBeaconAngle * Float.pi / 180
-        let audioDist: Float = 4.0
+        let audioScale: Float = 4.0
+        let yElev: Float = 0.0
         shrineNode?.position = AVAudio3DPoint(
             x: sinf(rad) * audioScale,
             y: yElev,
@@ -729,7 +775,7 @@ final class SpatialAudioEngine: ObservableObject {
             print("[ShrinePos] [\(mode)] rel=\(String(format: "%.1f", relativeBeaconAngle))° dist=\(String(format: "%.1f", beaconDistanceMeters))m wp=\(waypointWorldPosition != nil) engine=\(avEngine.isRunning)")
         }
 
-        if let until = obstacleFlashUntil, now >= until {
+        if let until = obstacleFlashUntil, Date() >= until {
             obstacleFlashUntil = nil
             obstacleFlashBearingDeg = nil
         }
