@@ -85,7 +85,7 @@ enum ToolCallStatus: Equatable {
 enum ToolDeclarations {
 
   static func allDeclarations() -> [[String: Any]] {
-    return [execute, navigateTo, setPing, clearPing]
+    return [execute, invokeOpenClawTool, navigateTo, setPing, clearPing]
   }
 
   static let navigateTo: [String: Any] = [
@@ -134,9 +134,34 @@ enum ToolDeclarations {
     "behavior": "BLOCKING"
   ]
 
+  /// Structured call to a named OpenClaw gateway skill (HTTP `tools/invoke` when the gateway exposes it; otherwise WebSocket agent fallback).
+  static let invokeOpenClawTool: [String: Any] = [
+    "name": "invoke_openclaw_tool",
+    "description": "Call a registered OpenClaw skill on the user's gateway by name with structured arguments. Use for gateway-defined tools (e.g. messaging skills) when you know the skill name and parameters. For open-ended assistant work, use execute instead.",
+    "parameters": [
+      "type": "object",
+      "properties": [
+        "tool_name": [
+          "type": "string",
+          "description": "Skill name as registered on the OpenClaw gateway."
+        ],
+        "tool_args": [
+          "type": "string",
+          "description": "JSON object string of arguments for the skill, e.g. {\"to\":\"+15551234567\",\"message\":\"Hello\"}. Use {} if the skill needs no args."
+        ],
+        "session_key": [
+          "type": "string",
+          "description": "Optional gateway session key; omit for default."
+        ]
+      ],
+      "required": ["tool_name"]
+    ] as [String: Any],
+    "behavior": "BLOCKING"
+  ]
+
   static let execute: [String: Any] = [
     "name": "execute",
-    "description": "Your only way to take action. You have no memory, storage, or ability to do anything on your own -- use this tool for everything: sending messages, searching the web, adding to lists, setting reminders, creating notes, research, drafts, scheduling, smart home control, app interactions, or any request that goes beyond answering a question. When in doubt, use this tool.",
+    "description": "Primary way to delegate open-ended tasks to the OpenClaw gateway agent (WebSocket). You have no memory, storage, or ability to do things on your own -- use execute for sending messages, searching the web, lists, reminders, notes, research, drafts, scheduling, smart home, app interactions, or any request beyond a short answer. When the user names a specific gateway skill with known parameters, prefer invoke_openclaw_tool. When in doubt, use execute.",
     "parameters": [
       "type": "object",
       "properties": [

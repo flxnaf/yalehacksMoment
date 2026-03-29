@@ -1,5 +1,7 @@
 import Foundation
 
+// NOTE: The NavigatorImpaired app uses WebSocket `chat.send` on OpenClawBridge; this sample may still reference legacy REST for local experimentation.
+
 enum OpenClawConnectionState: Equatable {
   case notConfigured
   case checking
@@ -38,9 +40,19 @@ class OpenClawBridge: ObservableObject {
       return
     }
     connectionState = .checking
-    guard let url = URL(string: "\(GeminiConfig.openClawHost):\(GeminiConfig.openClawPort)/v1/chat/completions") else {
-      connectionState = .unreachable("Invalid URL")
+    let base = "\(GeminiConfig.openClawHost):\(GeminiConfig.openClawPort)"
+
+    if await tryHealthCheck(baseURL: base) {
       return
+    }
+
+    await checkConnectionViaChatCompletions(baseURL: base)
+  }
+
+  /// Returns `true` if the gateway responded 2xx to `GET /health`.
+  private func tryHealthCheck(baseURL: String) async -> Bool {
+    guard let url = URL(string: "\(baseURL)/health") else {
+      return false
     }
     var request = URLRequest(url: url)
     request.httpMethod = "GET"
@@ -48,12 +60,54 @@ class OpenClawBridge: ObservableObject {
     request.setValue("glass", forHTTPHeaderField: "x-openclaw-message-channel")
     do {
       let (_, response) = try await pingSession.data(for: request)
-      if let http = response as? HTTPURLResponse, (200...499).contains(http.statusCode) {
+      guard let http = response as? HTTPURLResponse else { return false }
+      if (200...299).contains(http.statusCode) {
         connectionState = .connected
-        NSLog("[OpenClaw] Gateway reachable (HTTP %d)", http.statusCode)
-      } else {
-        connectionState = .unreachable("Unexpected response")
+        NSLog("[OpenClaw] Gateway reachable via /health (HTTP %d)", http.statusCode)
+        return true
       }
+      NSLog("[OpenClaw] GET /health HTTP %d, falling back to POST chat completions", http.statusCode)
+    } catch {
+      NSLog("[OpenClaw] GET /health failed (%@), falling back to POST", error.localizedDescription)
+    }
+    return false
+  }
+
+  private func checkConnectionViaChatCompletions(baseURL: String) async {
+    guard let url = URL(string: "\(baseURL)/v1/chat/completions") else {
+      connectionState = .unreachable("Invalid URL")
+      return
+    }
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("Bearer \(GeminiConfig.openClawGatewayToken)", forHTTPHeaderField: "Authorization")
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue(sessionKey, forHTTPHeaderField: "x-openclaw-session-key")
+    request.setValue("glass", forHTTPHeaderField: "x-openclaw-message-channel")
+    let pingBody: [String: Any] = [
+      "model": "openclaw",
+      "messages": [["role": "user", "content": "__openclaw_connectivity_check__"]],
+      "stream": false,
+    ]
+    do {
+      request.httpBody = try JSONSerialization.data(withJSONObject: pingBody)
+      let (_, response) = try await pingSession.data(for: request)
+      guard let http = response as? HTTPURLResponse else {
+        connectionState = .unreachable("Unexpected response")
+        return
+      }
+      if (200...299).contains(http.statusCode) {
+        connectionState = .connected
+        NSLog("[OpenClaw] Gateway reachable via chat completions (HTTP %d)", http.statusCode)
+        return
+      }
+      if http.statusCode == 401 || http.statusCode == 403 {
+        connectionState = .unreachable(
+          "Unauthorized (HTTP \(http.statusCode)): check Gateway token matches gateway auth.token"
+        )
+        return
+      }
+      connectionState = .unreachable("Gateway returned HTTP \(http.statusCode)")
     } catch {
       connectionState = .unreachable(error.localizedDescription)
       NSLog("[OpenClaw] Gateway unreachable: %@", error.localizedDescription)

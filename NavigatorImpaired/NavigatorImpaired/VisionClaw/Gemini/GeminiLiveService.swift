@@ -46,6 +46,13 @@ class GeminiLiveService: ObservableObject {
       return false
     }
 
+    // A second connect() while the first is still in flight overwrites `connectContinuation` and leaks the first waiter.
+    receiveTask?.cancel()
+    receiveTask = nil
+    webSocketTask?.cancel(with: .goingAway, reason: nil)
+    webSocketTask = nil
+    resolveConnect(success: false)
+
     connectionState = .connecting
 
     let result = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -157,13 +164,14 @@ class GeminiLiveService: ObservableObject {
   func sendTextMessage(_ text: String) {
     guard connectionState == .ready else { return }
     sendQueue.async { [weak self] in
-      let msg: [String: Any] = [
-        "clientContent": [
-          "turns": [
-            ["role": "user", "parts": [["text": text]]]
-          ]
-        ]
+      // turnComplete is required or the server waits for more client input and may not generate audio.
+      let clientContent: [String: Any] = [
+        "turns": [
+          ["role": "user", "parts": [["text": text]]]
+        ],
+        "turnComplete": true
       ]
+      let msg: [String: Any] = ["clientContent": clientContent]
       self?.sendJSON(msg)
     }
   }

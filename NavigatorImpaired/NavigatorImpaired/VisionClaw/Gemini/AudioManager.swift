@@ -24,6 +24,10 @@ class AudioManager {
   private var mediaServicesResetObserver: NSObjectProtocol?
   private var foregroundObserver: NSObjectProtocol?
 
+  /// Mic tap must use hardware format; after route changes, `outputFormat(forBus:)` can disagree with the tap and crash (err format mismatch).
+  private var micTapConverter: AVAudioConverter?
+  private var micTapConverterFrom: AVAudioFormat?
+
   init() {
     self.outputFormat = AVAudioFormat(
       commonFormat: .pcmFormatInt16,
@@ -79,54 +83,39 @@ class AudioManager {
     audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: playerFormat)
 
     let inputNode = audioEngine.inputNode
-    let inputNativeFormat = inputNode.outputFormat(forBus: 0)
-
-    NSLog("[Audio] Native input format: %@ sampleRate=%.0f channels=%d",
-          inputNativeFormat.commonFormat == .pcmFormatFloat32 ? "Float32" :
-          inputNativeFormat.commonFormat == .pcmFormatInt16 ? "Int16" : "Other",
-          inputNativeFormat.sampleRate, inputNativeFormat.channelCount)
-
-    // Always tap in native format (Float32) and convert to Int16 PCM manually.
-    // AVAudioEngine taps don't reliably convert between sample formats inline.
-    let needsResample = inputNativeFormat.sampleRate != GeminiConfig.inputAudioSampleRate
-        || inputNativeFormat.channelCount != GeminiConfig.audioChannels
-
-    NSLog("[Audio] Needs resample: %@", needsResample ? "YES" : "NO")
+    let reportedFormat = inputNode.outputFormat(forBus: 0)
+    NSLog("[Audio] Reported input format (may lag route): %@ sampleRate=%.0f channels=%d",
+          reportedFormat.commonFormat == .pcmFormatFloat32 ? "Float32" :
+          reportedFormat.commonFormat == .pcmFormatInt16 ? "Int16" : "Other",
+          reportedFormat.sampleRate, reportedFormat.channelCount)
 
     sendQueue.async { self.accumulatedData = Data() }
 
-    var converter: AVAudioConverter?
-    if needsResample {
-      let resampleFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: GeminiConfig.inputAudioSampleRate,
-        channels: GeminiConfig.audioChannels,
-        interleaved: false
-      )!
-      converter = AVAudioConverter(from: inputNativeFormat, to: resampleFormat)
-    }
+    resetMicConverter()
 
     var tapCount = 0
-    inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputNativeFormat) { [weak self] buffer, _ in
+    // `format: nil` = tap uses live hardware format. Passing `outputFormat` after BT/headset changes can mismatch hw (e.g. 48k vs 24k) and throw NSException.
+    inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
       guard let self else { return }
 
       tapCount += 1
-      let pcmData: Data
+      let srcFormat = buffer.format
+      if tapCount == 1 {
+        NSLog("[Audio] Tap hardware format: sampleRate=%.0f channels=%d",
+              srcFormat.sampleRate, srcFormat.channelCount)
+      }
 
-      if let converter {
-        let resampleFormat = AVAudioFormat(
-          commonFormat: .pcmFormatFloat32,
-          sampleRate: GeminiConfig.inputAudioSampleRate,
-          channels: GeminiConfig.audioChannels,
-          interleaved: false
-        )!
-        guard let resampled = self.convertBuffer(buffer, using: converter, targetFormat: resampleFormat) else {
-          if tapCount <= 3 { NSLog("[Audio] Resample failed for tap #%d", tapCount) }
+      let pcmData: Data
+      if Self.bufferMatchesGeminiInput(srcFormat) {
+        pcmData = self.float32BufferToInt16Data(buffer)
+      } else {
+        guard let conv = self.converterForMicSource(srcFormat),
+              let target = Self.geminiFloatInputFormat(),
+              let resampled = self.convertBuffer(buffer, using: conv, targetFormat: target) else {
+          if tapCount <= 5 { NSLog("[Audio] Resample failed for tap #%d", tapCount) }
           return
         }
         pcmData = self.float32BufferToInt16Data(resampled)
-      } else {
-        pcmData = self.float32BufferToInt16Data(buffer)
       }
 
       // Accumulate into ~100ms chunks before sending to Gemini
@@ -185,13 +174,19 @@ class AudioManager {
   }
 
   func stopCapture() {
+    teardownCaptureGraphIfNeeded()
+    removeObservers()
+  }
+
+  /// Removes tap + detaches `playerNode`. Required before `startCapture()` can call `attach` again; otherwise AVAudioEngine throws an NSException.
+  private func teardownCaptureGraphIfNeeded() {
     guard isCapturing else { return }
+    resetMicConverter()
     audioEngine.inputNode.removeTap(onBus: 0)
     playerNode.stop()
     audioEngine.stop()
     audioEngine.detach(playerNode)
     isCapturing = false
-    // Flush any remaining accumulated audio
     sendQueue.async {
       if !self.accumulatedData.isEmpty {
         let chunk = self.accumulatedData
@@ -199,7 +194,6 @@ class AudioManager {
         self.onAudioCaptured?(chunk)
       }
     }
-    removeObservers()
   }
 
   // MARK: - Audio Interruption & Route Change Handling
@@ -314,12 +308,7 @@ class AudioManager {
   private func attemptAudioReset() {
     NSLog("[Audio] Attempting audio reset")
     let wasCapturing = isCapturing
-
-    if audioEngine.isRunning {
-      audioEngine.stop()
-    }
-    audioEngine.inputNode.removeTap(onBus: 0)
-    isCapturing = false
+    teardownCaptureGraphIfNeeded()
 
     if wasCapturing {
       do {
@@ -352,6 +341,40 @@ class AudioManager {
   }
 
   // MARK: - Private helpers
+
+  private static func geminiFloatInputFormat() -> AVAudioFormat? {
+    AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: GeminiConfig.inputAudioSampleRate,
+      channels: GeminiConfig.audioChannels,
+      interleaved: false
+    )
+  }
+
+  private static func bufferMatchesGeminiInput(_ fmt: AVAudioFormat) -> Bool {
+    fmt.commonFormat == .pcmFormatFloat32
+      && fmt.channelCount == GeminiConfig.audioChannels
+      && abs(fmt.sampleRate - GeminiConfig.inputAudioSampleRate) < 0.5
+  }
+
+  private func resetMicConverter() {
+    micTapConverter = nil
+    micTapConverterFrom = nil
+  }
+
+  private func converterForMicSource(_ src: AVAudioFormat) -> AVAudioConverter? {
+    guard let target = Self.geminiFloatInputFormat() else { return nil }
+    if let from = micTapConverterFrom,
+       from.sampleRate == src.sampleRate,
+       from.channelCount == src.channelCount,
+       from.commonFormat == src.commonFormat,
+       from.isInterleaved == src.isInterleaved {
+      return micTapConverter
+    }
+    micTapConverterFrom = src
+    micTapConverter = AVAudioConverter(from: src, to: target)
+    return micTapConverter
+  }
 
   private func computeRMS(_ buffer: AVAudioPCMBuffer) -> Float {
     let frameCount = Int(buffer.frameLength)

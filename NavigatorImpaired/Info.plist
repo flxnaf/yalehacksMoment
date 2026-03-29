@@ -53,8 +53,10 @@
 	<string>To listen to audio from Meta AI Glasses.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Used for real-time depth estimation and for testing the assistant pipeline from the phone camera.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>SightAssist uses your local network to reach your Mac's OpenClaw gateway (Gemini tool calls) and optional fall-alert email relay.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>SightAssist needs your location for walking navigation.</string>
+	<string>SightAssist needs your location for walking navigation and to include your last known location in fall alerts to your guardian.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Used for voice conversations with the AI assistant while streaming from your glasses, and for depth benchmarking features.</string>
 	<key>NSMotionUsageDescription</key>

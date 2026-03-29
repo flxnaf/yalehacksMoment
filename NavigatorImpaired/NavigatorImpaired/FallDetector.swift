@@ -7,6 +7,7 @@ protocol FallDetectorDelegate: AnyObject {
 }
 
 /// iPhone accelerometer fall detection: freefall then impact, with stationary rejection and cooldown.
+/// (Tighter than a minimal “low-g then spike” prototype — tuned to reduce false positives while still catching real drops.)
 final class FallDetector {
     weak var delegate: FallDetectorDelegate?
 

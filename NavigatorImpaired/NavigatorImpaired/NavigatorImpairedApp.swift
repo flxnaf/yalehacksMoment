@@ -1,3 +1,4 @@
+import GoogleMaps
 import MWDATCore
 import SwiftUI
 
@@ -16,6 +17,10 @@ struct NavigatorImpairedApp: App {
     #endif
 
     init() {
+        let mapsKey = Secrets.googleMapsAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !mapsKey.isEmpty, mapsKey != "YOUR_KEY_HERE" {
+            GMSServices.provideAPIKey(mapsKey)
+        }
         do {
             try Wearables.configure()
         } catch {

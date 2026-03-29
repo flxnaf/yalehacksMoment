@@ -9,11 +9,15 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
 
     /// Smoothed GPS coordinate (filtered to reduce jitter when stationary).
     @Published var currentCoordinate: CLLocationCoordinate2D?
+    /// Latest raw/smoothed `CLLocation` for accuracy and distance APIs.
+    @Published var currentLocation: CLLocation?
     @Published var currentHeading: Double = 0
     @Published var hasPermission: Bool = false
 
     /// Current speed in m/s from GPS. Negative means invalid.
     @Published var currentSpeed: Double = -1
+
+    private var navigationHighAccuracy = false
 
     /// Raw unfiltered coordinate for debugging.
     private var rawCoordinate: CLLocationCoordinate2D?
@@ -44,10 +48,17 @@ final class LocationManager: NSObject, ObservableObject, CLLocationManagerDelega
         manager.stopUpdatingHeading()
     }
 
+    /// Toggle `kCLLocationAccuracyBestForNavigation` while walking navigation is active.
+    func setNavigationHighAccuracyEnabled(_ enabled: Bool) {
+        navigationHighAccuracy = enabled
+        manager.desiredAccuracy = enabled ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
+    }
+
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
         rawCoordinate = loc.coordinate
         currentSpeed = loc.speed
+        currentLocation = loc
 
         if let prev = currentCoordinate {
             // When stationary, use very low alpha to virtually freeze position.

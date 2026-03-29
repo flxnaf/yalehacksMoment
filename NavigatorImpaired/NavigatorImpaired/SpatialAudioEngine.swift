@@ -272,6 +272,19 @@ final class SpatialAudioEngine: ObservableObject {
     private var lockedGPSBearing: Float = 0
     private var isGPSBearingLocked: Bool = false
 
+    /// Extra multiplier for shrine ping (navigation ducking near waypoints). Applied with policy duck.
+    private var beaconVolumeScale: Float = 1.0
+
+    /// Smoothed GPS-derived bearing to beacon (prevents jitter from GPS noise).
+    private var smoothedGPSBearing: Float = 0
+
+    /// Frozen GPS bearing used when the user is stationary (speed < threshold).
+    /// GPS bearing is only updated when the user is actually moving.
+    private var lockedGPSBearing: Float = 0
+    private var isGPSBearingLocked: Bool = false
+
+    // (prevGyroYaw removed — Apple's .xMagneticNorthZVertical handles fusion internally)
+
     // MARK: - Observers
 
     private var interruptionObserver: NSObjectProtocol?
@@ -376,6 +389,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
 
         beaconActive = true
+        beaconVolumeScale = 1
         shrinePing.targetVolume = 0.70
         updateShrineNodePosition()
     }
@@ -473,7 +487,7 @@ final class SpatialAudioEngine: ObservableObject {
         detectedSceneLabel = visionDetector.latestSceneLabel?.identifier
 
         if beaconActive {
-            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.70
+            shrinePing.targetVolume = policyOutput.duckNonSpeech * 0.70 * beaconVolumeScale
         }
 
         updateCount += 1
@@ -702,6 +716,8 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     private func stopEngine() {
+        beaconVolumeScale = 1
+        shrinePing.pingInterval = 2.0
         shrinePing.targetVolume = 0
         shoreAudio.stop()
         isOnTarget = false

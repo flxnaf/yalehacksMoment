@@ -3,9 +3,19 @@ import MessageUI
 import ObjectiveC
 import UIKit
 
-/// Native bridge for SightAssist JS skills and guardian SMS / iMessage flows.
+/// Native bridge for SightAssist JS skills. `sendMessage` requires `phone` or `to` in params.
 @MainActor
 final class SightAssistBridge: NSObject {
+    /// In-app fall alerts and other native callers (same behavior as JS `sendMessage`).
+    static func sendTextMessage(phone: String, body: String) async -> Bool {
+        let bridge = SightAssistBridge()
+        let result = await bridge.handleCallAsync(
+            method: "sendMessage",
+            params: ["phone": phone, "message": body]
+        )
+        return (result["success"] as? Bool) == true
+    }
+
     private static var assocKey: UInt8 = 0
 
     private final class ComposeDelegate: NSObject, MFMessageComposeViewControllerDelegate {
@@ -35,10 +45,11 @@ final class SightAssistBridge: NSObject {
     /// Known limitation: `sms:` fallback opens Messages with a prefilled draft; the user may still need to tap Send.
     private func deliverSendMessage(params: [String: Any]) async -> [String: Any] {
         let message = params["message"] as? String ?? ""
-        guard let cfg = GuardianAlertManager.shared.loadConfig() else {
-            return ["success": false, "error": "no_guardian_config"]
+        let rawPhone = (params["phone"] as? String) ?? (params["to"] as? String) ?? ""
+        let phone = rawPhone.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phone.isEmpty else {
+            return ["success": false, "error": "missing_phone"]
         }
-        let phone = cfg.phoneNumber
 
         if MFMessageComposeViewController.canSendText(), let presenter = Self.topViewController() {
             let sent = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in

@@ -27,7 +27,7 @@ final class FallDetectionCoordinator: FallDetectorDelegate {
 
     func triggerManualSOS() {
         Task {
-            let frame = await cameraManager?.captureFrame()
+            let frame = await frameForGuardianEmail()
             await GuardianAlertManager.shared.triggerAlert(confidence: 1.0, lastFrame: frame)
         }
     }
@@ -40,8 +40,16 @@ final class FallDetectionCoordinator: FallDetectorDelegate {
             return
         }
         Task {
-            let frame = await cameraManager?.captureFrame()
+            let frame = await frameForGuardianEmail()
             await GuardianAlertManager.shared.triggerAlert(confidence: confidence, lastFrame: frame)
         }
+    }
+
+    /// Prefer the last frame actually sent to Gemini Live; otherwise the current stream frame (glasses/phone).
+    private func frameForGuardianEmail() async -> UIImage? {
+        if let lastToGemini = LastGeminiVideoFrame.lastImageSentToGemini {
+            return lastToGemini
+        }
+        return await cameraManager?.captureFrame()
     }
 }
